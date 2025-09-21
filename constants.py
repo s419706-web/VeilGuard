@@ -7,6 +7,6 @@ PORT = 9921
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "MooPassword1",
+    "password": "davids74",
     "database": "mysql"
 }

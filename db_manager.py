@@ -1,7 +1,6 @@
 # db_manager.py
 # This file manages all interactions with the database using a class-based approach.
 
-from datetime import datetime
 from mysql.connector import connect
 
 class DatabaseManager:
@@ -245,6 +244,8 @@ class DatabaseManager:
             print(f"Media record inserted: User ID={user_id}, Media Type={media_type_id}, Path={path}")
         else:
             print("Table `decrypted_media` does not exist.")
+            
+    
     
     def close(self):
         """Close the database connection"""
@@ -252,3 +253,4 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
             print("Database connection closed.")
+            

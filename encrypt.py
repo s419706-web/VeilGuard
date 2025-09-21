@@ -79,34 +79,23 @@ class Encryption:
         sock.sendall(encrypted_bytes)
 
     def receive_encrypted_message(self, sock) -> str:
-        """
-        Receives and decrypts a message from a socket
-        
-        Documentation:
-        This function receives an encrypted message from the provided socket,
-        decrypts it, and returns the original message as a string.
-        It first reads 4 bytes to determine the message length, then reads the encrypted message.
-        
-        Args:
-            sock: Socket object to receive data from
-            
-        Returns:
-            str: Decrypted message
-            
-        Returns empty string if no data is received
-        """
         raw_length = sock.recv(4)
         if not raw_length:
-            return ""
+            raise ConnectionResetError("Socket closed while receiving message length.")
+
         message_length = int.from_bytes(raw_length, byteorder='big')
         data = b''
         while len(data) < message_length:
             chunk = sock.recv(min(CHUNK_SIZE, message_length - len(data)))
             if not chunk:
-                break
+                raise ConnectionResetError("Socket closed while receiving message content.")
             data += chunk
-        decrypted = self.decrypt_data(data.decode())
-        return decrypted.decode()
+
+        try:
+            decrypted = self.decrypt_data(data.decode())
+            return decrypted.decode()
+        except Exception as e:
+            raise ValueError(f"Decryption failed: {e}")
 
 # Example usage:
 # encryptor = Encryption()

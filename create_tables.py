@@ -8,8 +8,8 @@ def create_all_tables(db_manager):
         db_manager: An initialized DatabaseManager instance
     """
     db_manager.create_table(
-        "clients",
-        "(client_id INT PRIMARY KEY, client_ip VARCHAR(255), client_port INT, last_seen DATETIME, ddos_status BOOLEAN, total_sent_media INT)"
+    "clients",
+    "(client_id VARCHAR(255) PRIMARY KEY, client_ip VARCHAR(255), client_port INT, last_seen DATETIME, ddos_status BOOLEAN, total_sent_media INT, password_hash VARCHAR(255))"
     )
     
     db_manager.create_table(
@@ -30,9 +30,11 @@ def populate_media_menu(db_manager):
         db_manager: An initialized DatabaseManager instance
     """
     predefined_media = [
-        (1, r"C:\Users\Mamriot_User\Desktop\secret_service_project\JPG\Ransom.jpg", None, None),
-        (2, r"C:\Users\Mamriot_User\Desktop\secret_service_project\JPG\cover1_image.jpg", None, None),
-        (3, None, None, r"C:\Users\Mamriot_User\Desktop\secret_service_project\MP4\video.mp4")
+        (1, r"C:\Users\shapi\Downloads\ransom.jpg", None, None),  # Type 1
+        (2, r"C:\Users\shapi\Downloads\coverimg.jpg", None, None), # Type 2 
+        (3, None, None, r"C:\Users\shapi\Downloads\panda.jpg"),    # Your existing type 3
+        (4, None, None, None),  # Type 4 for original verification images
+        (5, None, None, None)   # Type 5 for Fake/Real results
     ]
 
     existing_rows = db_manager.get_all_rows("media_menu")
@@ -43,4 +45,4 @@ def populate_media_menu(db_manager):
                 "(id_media, image_path, audio_path, video_path)",
                 "(%s, %s, %s, %s)",
                 media
-            )
+            ) 
