@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Local data / secrets
+processed/
+creds.txt
+
+# Big media (avoid bloating the repo; use LFS if needed)
+*.mp3
+*.wav
+*.ogg

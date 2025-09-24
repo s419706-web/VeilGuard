@@ -1,34 +1,63 @@
+"""
+VeilGuard Server
+----------------
+Tkinter-based server GUI that accepts encrypted client connections and supports:
+1) Blur Faces (server-side)
+2) Blur Background (server-side)
+3) User-Selected Blur (client-side interactive; server stores original/final)
+
+Features:
+- Client authentication with username/password hashing
+- SQLite database for client and media tracking
+- Real-time GUI updates with client list and logs
+- Background music during server operation
+- Robust error handling and logging
+- Saves original and processed images with user/option-aware filenames
+"""
+
 # ======================
 # IMPORTS AND DEPENDENCIES
 # ======================
+import os, warnings
+# in order to hide the pygame support prompt on import ( cosmetic)
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
+warnings.filterwarnings(
+    "ignore",
+    message="pkg_resources is deprecated as an API",
+    category=UserWarning
+)
+
+import pygame
+
 import socket
 import threading
 import tkinter as tk
 from tkinter import Label, scrolledtext, Toplevel, Listbox, Button
 from constants import IP, PORT
 from db_manager import DatabaseManager
-from create_tables import create_all_tables, populate_media_menu
-from hide_png import DataHider
-from decode_png import ImageExtractor
+from create_tables import create_all_tables, populate_media_types
 import datetime
 from PIL import Image, ImageTk
-import os
 import pygame
 import time
 from encrypt import Encryption
 from tools_no_encryption import *  
-from img_auth_checker import *
+from blur_ops import *
+import cv2
+import numpy as np
+
 
 # ======================
 # SERVER CLASS DEFINITION
 # ======================
 class Server:
     def __init__(self):
-        """Initialize server components and database connection"""
+        """Initialize server components and database connection."""
         # Database setup
         self.db_manager = DatabaseManager("localhost", "root", "davids74", "mysql")
         create_all_tables(self.db_manager)
-        populate_media_menu(self.db_manager)
+        populate_media_types(self.db_manager)
         
         # Encryption setup
         self.encryptor = Encryption()
@@ -45,24 +74,50 @@ class Server:
     # AUDIO FUNCTIONS
     # ======================
     def play_audio(self):
-        """Play background music during server operation"""
-        pygame.mixer.init()
-        pygame.mixer.music.load("C:\\Users\\shapi\\Downloads\\cool_intro.mp3")
-        pygame.mixer.music.play()
-        pygame.mixer.music.queue("C:\\Users\\shapi\\Downloads\\game-of-thrones-song.mp3")
+        """Play intro once, then loop the cool track forever."""
+        try:
+
+            pygame.mixer.init()
+
+            intro = r"C:\Users\shapi\Downloads\alin\cool_intro.mp3"
+            loop_track = r"C:\Users\shapi\Downloads\game-of-thrones-song.mp3"
+
+            # Play intro once
+            pygame.mixer.music.load(intro)
+            pygame.mixer.music.set_volume(1.0)  # optional
+            pygame.mixer.music.play(loops=0, fade_ms=300)
+
+            # After intro finishes, start loop_track forever (in a tiny background thread)
+            def _loop_after_intro():
+                import time
+                # Wait until intro ends
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.2)
+                # Now loop the cool track forever
+                pygame.mixer.music.load(loop_track)
+                pygame.mixer.music.play(loops=-1, fade_ms=300)
+
+            threading.Thread(target=_loop_after_intro, daemon=True).start()
+
+        except Exception as e:
+            try:
+                self.update_gui_log(f"Audio error: {e}")
+            except Exception:
+                pass
+
 
     # ======================
     # GUI UPDATE FUNCTIONS
     # ======================
     def update_gui_log(self, message):
-        """Append messages to the server log display"""
+        """Append messages to the server log display."""
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.config(state=tk.DISABLED)
         self.log_text.yview(tk.END)
 
     def update_client_list(self):
-        """Refresh the list of connected clients"""
+        """Refresh the list of connected clients."""
         self.client_listbox.delete(0, tk.END)
         clients = self.db_manager.get_rows_with_value("clients", "1", "1")
         for client in clients:
@@ -72,7 +127,7 @@ class Server:
     # CLIENT INFO DISPLAY
     # ======================
     def show_client_details(self, client_id):
-        """Show popup with client details"""
+        """Show popup with client details."""
         client_data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
         if not client_data:
             return
@@ -83,7 +138,7 @@ class Server:
         details_window.geometry("400x350")
         
         # Background image
-        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\shapi\Downloads\background_img.jpg"))
+        bg_image = ImageTk.PhotoImage(Image.open(r"C:\Users\shapi\Downloads\alin\background_img.jpg"))
         bg_label = Label(details_window, image=bg_image)
         bg_label.image = bg_image
         bg_label.place(relwidth=1, relheight=1)
@@ -109,7 +164,7 @@ class Server:
         history_button.pack(pady=10)
 
     def show_client_history(self, client_id):
-        """Display client's image history in new window"""
+        """Display client's image history in new window."""
         # Window setup
         history_window = Toplevel()
         history_window.title(f"Client {client_id} - History")
@@ -150,7 +205,7 @@ class Server:
     # CLIENT HANDLING
     # ======================
     def handle_client(self, client_socket):
-        """Main client connection handler"""
+        """Main client connection handler."""
         client_id = 'unknown'
         try:
             # Authentication phase
@@ -180,7 +235,7 @@ class Server:
                     "(%s, %s, %s, %s, %s, %s, %s)",
                     (username, client_ip, client_port, datetime.datetime.now(), False, 0, hashed_password)
                 )
-                self.encryptor.send_encrypted_message(client_socket, "WELCOME TO MASKER SERVER! NEW ACCOUNT CREATED.")
+                self.encryptor.send_encrypted_message(client_socket, "WELCOME TO VEILGUARD SERVER! NEW ACCOUNT CREATED.")
                 client_status = "NEW"
                 total_actions = 0
 
@@ -192,18 +247,21 @@ class Server:
             while True:
                 try:
                     # Send menu and get option
-                    self.encryptor.send_encrypted_message(client_socket, "\n1: Hide Data\n2: Decode Data\n3: Verify Image Authenticity\n4: Logout")
+                    self.encryptor.send_encrypted_message(
+                        client_socket,
+                        "\n1: Blur Faces\n2: Blur Background\n3: User-Selected Blur\n4: Logout"
+                    )
                     option = self.encryptor.receive_encrypted_message(client_socket)
 
                     # Process commands
                     if option == "1":
-                        self.handle_hide_option(client_socket, client_id)
+                        self.handle_option_1_blur_faces(client_socket, client_id)
                         total_actions += 1
                     elif option == "2":
-                        self.handle_decode_option(client_socket, client_id)
+                        self.handle_option_2_blur_background(client_socket, client_id)
                         total_actions += 1
                     elif option == "3":
-                        self.handle_verify_option(client_socket, client_id)
+                        self.handle_option_3_user_selected_blur_receive(client_socket, client_id)
                         total_actions += 1
                     elif option == "4":
                         self.handle_logout(client_socket, client_id)
@@ -212,9 +270,11 @@ class Server:
                         self.encryptor.send_encrypted_message(client_socket, "Invalid option.")
 
                     # Update action count
-                    if option in ("1", "2","3"):
-                        self.db_manager.update_row("clients", "client_id", client_id, 
-                                                ["total_sent_media"], [total_actions])
+                    if option in ("1", "2", "3"):
+                        self.db_manager.update_row(
+                            "clients", "client_id", client_id, 
+                            ["total_sent_media"], [total_actions]
+                        )
 
                 except (ConnectionResetError, socket.error) as e:
                     self.update_gui_log(f"Client {client_id} disconnected abruptly: {str(e)}")
@@ -241,101 +301,207 @@ class Server:
     # ======================
     # COMMAND HANDLERS
     # ======================
-    def handle_hide_option(self, client_socket, client_id):
-        """Handle data hiding request"""
-        hider = DataHider(client_socket, self.db_manager, client_id)
-        result = hider.run()
-        if result is not None and all(result):
-            media_id, media_type_id, path = result
-            self.db_manager.insert_decrypted_media(client_id, media_type_id, path)
-        else:
-            self.update_gui_log(f"Client {client_id}: Hide operation failed")
-
-    def handle_decode_option(self, client_socket, client_id):
-        """Handle image decoding request"""
-        extractor = ImageExtractor(client_socket, self.db_manager, client_id)
-        media_id, media_type, path = extractor.run()
-        self.db_manager.insert_decrypted_media(client_id, media_id, path)
-
-    def handle_verify_option(self, client_socket, client_id):
+    def handle_option_1_blur_faces(self, client_socket, client_id):
+        """Receive image -> save original -> face blur -> save -> send back -> show both."""
         try:
-            # 1. Receive image from client
             image_size = int(self.encryptor.receive_encrypted_message(client_socket))
             self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
-            
-            # 2. Save original temporarily
-            timestamp = int(time.time())
-            original_path = f"verify_{client_id}_{timestamp}.jpg"
-            with open(original_path, "wb") as f:
-                remaining = image_size
-                while remaining > 0:
-                    chunk = client_socket.recv(min(4096, remaining))
-                    f.write(chunk)
-                    remaining -= len(chunk)
+            buf, remaining = b'', image_size
+            while remaining > 0:
+                chunk = client_socket.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                buf += chunk
+                remaining -= len(chunk)
 
-            # 3. Perform verification
-            checker = ImageAuthChecker()
-            is_fake = checker.is_image_fake(original_path)
-            result = "Fake" if is_fake else "Real"
-            result_path = "Fake.jpg" if is_fake else "Real.jpg"
-            
-            # 4. Show BOTH images in GUI
-            self.update_gui_log(f"Client {client_id} verification: Original + {result} result shown - Verification completed")
-            
-            # Open both images (original first, then result)
-            os.startfile(original_path)
-            time.sleep(0.5)  # Small delay
-            os.startfile(result_path)
-            
-            # Store BOTH with new types
-            self.db_manager.insert_row(
-                "decrypted_media",
-                "(user_id, media_type_id, path_to_decrypted_media)",
-                "(%s, %s, %s)",
-                (client_id, 4, original_path)  # Type 4 for original
-            )
-            self.db_manager.insert_row(
-                "decrypted_media",
-                "(user_id, media_type_id, path_to_decrypted_media)",
-                "(%s, %s, %s)",
-                (client_id, 5, result_path)  # Type 5 for result
-            )
-            
-            # 6. Send text result
-            self.encryptor.send_encrypted_message(client_socket, f"[RESULT] Image is {result}")
+            # Save original with username + option
+            orig_path = save_raw_image_bytes(buf, base_dir="processed", prefix=f"{client_id}_face_original")
+            self.db_manager.insert_decrypted_media(client_id, 101, orig_path)
+            self.update_gui_log(f"Client {client_id}: Face blur (original) -> {orig_path}")
+
+            # Process
+            np_arr = np.frombuffer(buf, dtype=np.uint8)
+            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                raise ValueError("Failed to decode image")
+
+            out_bgr = blur_faces_bgr(img_bgr, ksize=51)
+
+            # Save processed with username + option
+            out_path = save_bgr_image(out_bgr, base_dir="processed", prefix=f"{client_id}_face_processed")
+            self.db_manager.insert_decrypted_media(client_id, 1, out_path)
+            self.update_gui_log(f"Client {client_id}: Face blur (processed) -> {out_path}")
+
+            # Show both
+            try:
+                os.startfile(orig_path); time.sleep(0.4)
+                os.startfile(out_path)
+            except Exception:
+                pass
+
+            # Send processed back
+            ok, enc = cv2.imencode(".jpg", out_bgr)
+            if not ok:
+                raise ValueError("imencode failed")
+            out_bytes = enc.tobytes()
+            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+            client_socket.sendall(out_bytes)
 
         except Exception as e:
             self.encryptor.send_encrypted_message(client_socket, f"[ERROR] {str(e)}")
-            
+
+    def handle_option_2_blur_background(self, client_socket, client_id):
+        """Receive image -> save original -> background blur -> save -> send back -> show both."""
+        try:
+            image_size = int(self.encryptor.receive_encrypted_message(client_socket))
+            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
+            buf, remaining = b'', image_size
+            while remaining > 0:
+                chunk = client_socket.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                buf += chunk
+                remaining -= len(chunk)
+
+            # Save original with username + option
+            orig_path = save_raw_image_bytes(buf, base_dir="processed", prefix=f"{client_id}_background_original")
+            self.db_manager.insert_decrypted_media(client_id, 102, orig_path)
+            self.update_gui_log(f"Client {client_id}: Background blur (original) -> {orig_path}")
+
+            # Process
+            out_bgr = blur_background_bgr_using_rembg_bytes(buf, blur_strength=51)
+
+            # Save processed with username + option
+            out_path = save_bgr_image(out_bgr, base_dir="processed", prefix=f"{client_id}_background_processed")
+            self.db_manager.insert_decrypted_media(client_id, 2, out_path)
+            self.update_gui_log(f"Client {client_id}: Background blur (processed) -> {out_path}")
+
+            # Show both
+            try:
+                os.startfile(orig_path); time.sleep(0.4)
+                os.startfile(out_path)
+            except Exception:
+                pass
+
+            # Send back
+            ok, enc = cv2.imencode(".jpg", out_bgr)
+            if not ok:
+                raise ValueError("imencode failed")
+            out_bytes = enc.tobytes()
+            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+            client_socket.sendall(out_bytes)
+
+        except Exception as e:
+            self.encryptor.send_encrypted_message(client_socket, f"[ERROR] {str(e)}")
+
+    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id):
+        """Instruct client; receive ORIGINAL then FINAL; save both; echo FINAL; show both."""
+        try:
+            self.encryptor.send_encrypted_message(
+                client_socket,
+                "[CLIENT_INTERACTIVE] Do local ROI blur. Then send ORIGINAL first, then FINAL on ESC."
+            )
+
+            # Receive ORIGINAL
+            orig_size = int(self.encryptor.receive_encrypted_message(client_socket))
+            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send ORIGINAL...")
+            orig_buf, remaining = b'', orig_size
+            while remaining > 0:
+                chunk = client_socket.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                orig_buf += chunk
+                remaining -= len(chunk)
+
+            orig_path = save_raw_image_bytes(orig_buf, base_dir="processed", prefix=f"{client_id}_userblur_original")
+            self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
+            self.update_gui_log(f"Client {client_id}: User blur (original) -> {orig_path}")
+
+            # Receive FINAL
+            fin_size = int(self.encryptor.receive_encrypted_message(client_socket))
+            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send FINAL...")
+            fin_buf, remaining = b'', fin_size
+            while remaining > 0:
+                chunk = client_socket.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                fin_buf += chunk
+                remaining -= len(chunk)
+
+            np_arr = np.frombuffer(fin_buf, dtype=np.uint8)
+            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                raise ValueError("Failed to decode final user-blurred image")
+
+            fin_path = save_bgr_image(img_bgr, base_dir="processed", prefix=f"{client_id}_userblur_processed")
+            self.db_manager.insert_decrypted_media(client_id, 3, fin_path)
+            self.update_gui_log(f"Client {client_id}: User blur (processed) -> {fin_path}")
+
+            # Show both
+            try:
+                os.startfile(orig_path); time.sleep(0.4)
+                os.startfile(fin_path)
+            except Exception:
+                pass
+
+            # Echo back FINAL
+            ok, enc = cv2.imencode(".jpg", img_bgr)
+            if not ok:
+                raise ValueError("imencode failed")
+            out_bytes = enc.tobytes()
+            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+            client_socket.sendall(out_bytes)
+
+        except Exception as e:
+            self.encryptor.send_encrypted_message(client_socket, f"[ERROR] {str(e)}")
+
     def handle_logout(self, client_socket, client_id):
-        """Handle client logout"""
-        self.update_gui_log(f"Client {client_id} logged out")
-        self.encryptor.send_encrypted_message(client_socket, "GOODBYE")
+        """Send goodbye, update GUI/DB, then gracefully close the socket."""
+        try:
+            self.update_gui_log(f"Client {client_id} requested logout")
+            # Optional: update last_seen
+            try:
+                self.db_manager.update_row("clients", "client_id", client_id, ["last_seen"], [datetime.datetime.now()])
+            except Exception:
+                pass
+            # Send goodbye
+            self.encryptor.send_encrypted_message(client_socket, "GOODBYE")
+        except Exception:
+            pass
+        finally:
+            # Graceful shutdown
+            try:
+                client_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                client_socket.close()
+            except Exception:
+                pass
+            self.update_gui_log(f"Connection with {client_id} closed after logout")
 
     # ======================
     # SERVER CONTROL
     # ======================
     def start_server(self):
-        """Main server listening loop"""
+        """Main server listening loop."""
         server_socket = socket.socket()
         server_socket.bind((IP, PORT))
         server_socket.listen()
-        self.update_gui_log("Server started...")
+        self.update_gui_log("VeilGuard server started...")
         while True:
             client_socket, _ = server_socket.accept()
             threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start()
 
     def create_gui(self):
-        """Initialize and run the server GUI"""
+        """Initialize and run the server GUI."""
         # Play intro audio
         self.play_audio()
-
-        
 
         # Main window setup
         self.root.destroy()
         self.root = tk.Tk()
-        self.root.title("Server GUI")
+        self.root.title("VeilGuard Server")
         self.root.geometry("500x500")
 
         # Background
@@ -344,27 +510,28 @@ class Server:
         bg_label.place(relwidth=1, relheight=1)
 
         # Log display
-        self.log_text = scrolledtext.ScrolledText(self.root, 
-                                                state=tk.DISABLED, 
-                                                wrap=tk.WORD, 
-                                                height=10, 
-                                                bg='black', 
-                                                fg='white')
+        self.log_text = scrolledtext.ScrolledText(
+            self.root, state=tk.DISABLED, wrap=tk.WORD, height=10, bg='black', fg='white'
+        )
         self.log_text.pack(expand=True, fill='both', padx=10, pady=5)
 
         # Client list
-        Label(self.root, text="MASKER Customers", 
-             font=("Arial", 14, "bold"), 
-             fg="white", bg="black").pack(pady=5)
+        Label(
+            self.root, text="VeilGuard Customers", 
+            font=("Arial", 14, "bold"), fg="white", bg="black"
+        ).pack(pady=5)
 
         self.client_listbox = Listbox(self.root, bg='black', fg='white')
         self.client_listbox.pack(expand=True, fill='both', padx=10, pady=5)
-        self.client_listbox.bind("<Double-Button-1>", 
-                               lambda e: self.show_client_details(self.client_listbox.get(self.client_listbox.curselection())))
+        self.client_listbox.bind(
+            "<Double-Button-1>",
+            lambda e: self.show_client_details(self.client_listbox.get(self.client_listbox.curselection()))
+        )
 
         # Start server thread
         threading.Thread(target=self.start_server, daemon=True).start()
         self.root.mainloop()
+
 
 # ======================
 # MAIN ENTRY POINT
@@ -372,3 +539,4 @@ class Server:
 if __name__ == "__main__":
     server = Server()
     server.create_gui()
+# ======================
