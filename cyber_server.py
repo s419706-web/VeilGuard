@@ -110,11 +110,13 @@ class Server:
     # GUI UPDATE FUNCTIONS
     # ======================
     def update_gui_log(self, message):
-        """Append messages to the server log display."""
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.config(state=tk.DISABLED)
-        self.log_text.yview(tk.END)
+        def _append():
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.config(state=tk.DISABLED)
+            self.log_text.yview(tk.END)
+        self.root.after(0, _append)
+
 
     def update_client_list(self):
         """Refresh the list of connected clients."""
