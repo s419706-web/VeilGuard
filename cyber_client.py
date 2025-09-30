@@ -594,7 +594,7 @@ class Client:
     # BUILD MODERN UI
     # ======================
     def build_ui(self):
-        """Build the modern VeilGuard client UI."""
+        """Build the modern VeilGuard client UI (no keyboard shortcuts)."""
         self.ui_root = tk.Tk()
         self.ui_root.title("VeilGuard Client")
         self.ui_root.geometry("1000x660")
@@ -614,29 +614,40 @@ class Client:
         top = ttk.Frame(self.ui_root, style="TopBar.TFrame")
         top.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(8, 10))
 
-        self.btns["choose"] = ttk.Button(top, text="📂  Choose Image   Ctrl+O",
-                                         style="Action.TButton",
-                                         command=self.choose_image_dialog)
+        # Buttons (labels cleaned; no Ctrl hints)
+        self.btns["choose"] = ttk.Button(
+            top, text="📂  Choose Image",
+            style="Action.TButton",
+            command=self.choose_image_dialog
+        )
         self.btns["choose"].pack(side=tk.LEFT, padx=6)
 
-        self.btns["face"] = ttk.Button(top, text="🎭  Blur Faces   Ctrl+1",
-                                       style="Action.TButton",
-                                       command=lambda: self.ui_run_async(self.ui_do_face))
+        self.btns["face"] = ttk.Button(
+            top, text="🎭  Blur Faces",
+            style="Action.TButton",
+            command=lambda: self.ui_run_async(self.ui_do_face)
+        )
         self.btns["face"].pack(side=tk.LEFT, padx=6)
 
-        self.btns["bg"] = ttk.Button(top, text="🖼️  Blur Background   Ctrl+2",
-                                     style="Action.TButton",
-                                     command=lambda: self.ui_run_async(self.ui_do_bg))
+        self.btns["bg"] = ttk.Button(
+            top, text="🖼️  Blur Background",
+            style="Action.TButton",
+            command=lambda: self.ui_run_async(self.ui_do_bg)
+        )
         self.btns["bg"].pack(side=tk.LEFT, padx=6)
 
-        self.btns["user"] = ttk.Button(top, text="✂️  User ROI Blur   Ctrl+3",
-                                       style="Action.TButton",
-                                       command=lambda: self.ui_run_async(self.ui_do_user))
+        self.btns["user"] = ttk.Button(
+            top, text="✂️  User ROI Blur",
+            style="Action.TButton",
+            command=lambda: self.ui_run_async(self.ui_do_user)
+        )
         self.btns["user"].pack(side=tk.LEFT, padx=6)
 
-        self.btns["logout"] = ttk.Button(top, text="🚪  Logout   Ctrl+L",
-                                         style="Action.TButton",
-                                         command=lambda: self.ui_run_async(self.ui_do_logout))
+        self.btns["logout"] = ttk.Button(
+            top, text="🚪  Logout",
+            style="Action.TButton",
+            command=lambda: self.ui_run_async(self.ui_do_logout)
+        )
         self.btns["logout"].pack(side=tk.RIGHT, padx=6)
 
         # Tooltips
@@ -668,19 +679,13 @@ class Client:
         self.spinner_label = ttk.Label(bottom, text="", style="Status.TLabel")
         self.spinner_label.pack(side=tk.RIGHT)
 
-        # Shortcuts
-        self.ui_root.bind("<Control-o>", lambda e: self.choose_image_dialog())
-        self.ui_root.bind("<Control-1>", lambda e: self.ui_run_async(self.ui_do_face))
-        self.ui_root.bind("<Control-2>", lambda e: self.ui_run_async(self.ui_do_bg))
-        self.ui_root.bind("<Control-3>", lambda e: self.ui_run_async(self.ui_do_user))
-        self.ui_root.bind("<Control-l>", lambda e: self.ui_run_async(self.ui_do_logout))
-
         # Window close
         self.ui_root.protocol("WM_DELETE_WINDOW", self.ui_root.destroy)
 
         # Initial hint
         self.ui_set_status("Ready · Choose an image or use defaults (test15/16/17).")
         self.ui_root.mainloop()
+
 
     # ======================
     # MAIN CLIENT LOOP
