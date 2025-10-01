@@ -1,86 +1,115 @@
-# VeilGuard — Quick README
 
-## What it is (very short)
+# VeilGuard — Quick README 
 
-Client–server image privacy suite:
-
-* **Server** (Tkinter) receives encrypted images, runs: **Face Blur**, **Background Blur**, stores originals & results in MySQL, and returns processed images.
-* **Client** (Tkinter) lets you pick an image, run operations, preview Original vs. Processed, and supports **User ROI Blur** locally (mouse-draw rectangles).
+**What it is:** A client–server image privacy suite.  
+- **Server (Tkinter)** receives encrypted images, runs **Face Blur**, **Background Blur**, stores originals & results in MySQL, and returns processed images to the client.  
+- **Client (Tkinter)** lets you pick an image (or use server defaults), run operations, preview **Original** vs **Processed**, and do **User ROI Blur** locally (draw rectangles; ESC to finish).
 
 ---
 
-## Requirements (minimal)
+## Requirements
 
 ### Server
+- **OS:** Windows recommended  
+- **Python:** 3.9+  
+- **MySQL:** running locally (or update credentials in code)  
+- **Python packages (install):**
+  ```powershell
+  pip install mediapipe opencv-python pillow numpy mysql-connector-python pygame
+````
 
-* **OS:** Windows recommended
-* **Python:** 3.9+
-* **MySQL** running locally (or update creds in code)
-* **Python packages:**
+* Configure `constants.py` (same `PORT` as the client).
+* Place default images in the server folder (next to `cyber_server.py`):
 
   ```
-  pygame
-  opencv-python
-  pillow
-  rembg
-  numpy
-  mysql-connector-python
+  test15.png, test16.png, test17.png
   ```
-* Configure `constants.py` (same `PORT` as client).
 
 ### Client
 
 * **OS:** Windows recommended
 * **Python:** 3.9+
-* **Python packages:**
+* **Python packages (install):**
 
+  ```powershell
+  pip install opencv-python pillow numpy
   ```
-  opencv-python
-  pillow
-  numpy
-  ```
-* Files required: `cyber_client.py`, `encrypt.py`, `constants.py` (from this project).
+* Required files: `cyber_client.py`, `encrypt.py`, `constants.py`.
 
 ---
 
-## Run the client from a different PC (connecting to your server)
+## How to Run (Same PC)
 
-1. **Copy client files** to the other PC:
-   `cyber_client.py`, `encrypt.py`, `constants.py` (and any image assets you want).
+1. **Start the server**
 
-2. **Install Python & deps** on the other PC:
+```powershell
+python cyber_server.py
+```
 
-   ```powershell
-   pip install opencv-python pillow numpy
-   ```
+2. **Start the client**
 
-3. **Point the client to your server**:
-   Edit `constants.py` on the client PC:
+```powershell
+python cyber_client.py
+```
 
-   ```python
-   IP = "<SERVER_PC_LOCAL_IP>"   # e.g. "192.168.1.23"
-   PORT = 4444                   # must match the server
-   CHUNK_SIZE = 4096
-   ```
+* First run shows a login (creates `creds.txt` locally).
+* If you **don’t select an image**, the client can send `"0"` and the **server will use its default images** (`test15/16/17`).
+* Choose one:
 
-4. **Allow the port on the server PC**:
-   On the server machine, open Windows Defender Firewall → inbound rule for `PORT` (e.g. 4444).
-   Ensure both PCs are on the same network (LAN). (Over the internet = port forwarding/VPN—**not recommended** for demos.)
+  * **Blur Faces** (server-side)
+  * **Blur Background** (server-side)
+  * **User ROI Blur** (client-side; draw rectangles, press **ESC** to finish)
+* **Logout** when done.
 
-5. **Start the server** on the server PC:
+---
 
-   ```powershell
-   python cyber_server.py
-   ```
+## Run the Client from a Different PC (LAN)
 
-6. **Run the client** on the other PC:
+1. Copy client files to the other PC: `cyber_client.py`, `encrypt.py`, `constants.py`.
+2. Install client deps:
 
-   ```powershell
-   python cyber_client.py
-   ```
+```powershell
+pip install opencv-python pillow numpy
+```
 
-   * First run shows login (creates `creds.txt`).
-   * Choose an image, click **Blur Faces / Blur Background / User ROI Blur**.
-   * **Logout** when done.
+3. Edit `constants.py` on the client PC to point to your server:
 
+```python
+IP = "<SERVER_PC_LOCAL_IP>"  # e.g. "192.168.1.23"
+PORT = 4444                  # must match the server
+CHUNK_SIZE = 4096
+```
 
+4. On the **server PC**, open Windows Defender Firewall and allow inbound TCP on the chosen `PORT` (e.g., 4444).
+5. Make sure both PCs are on the same LAN.
+6. Start the server on the server PC, then run the client on the client PC.
+
+---
+
+## Notes
+
+* For **server-default images** (no file selected), the server returns **ORIGINAL first** and then **PROCESSED**, so the client always shows both previews.
+* **User ROI Blur** runs locally; the final image is then sent to the server for saving/history.
+* Database tables: `clients` and `decrypted_media` (update credentials/host in `db_manager` usage if needed).
+
+---
+
+## Save Changes with Git
+
+```powershell
+git status
+git add -A
+git commit -m "short message"
+git push
+```
+
+If you need to set the remote:
+
+```powershell
+git remote set-url origin https://github.com/<your-username>/VeilGuard.git
+git branch -M main
+git push -u origin main
+```
+
+```
+```

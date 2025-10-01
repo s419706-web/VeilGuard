@@ -1,90 +1,54 @@
 """
 VeilGuard Client
 ----------------
-A Tkinter-based client application that connects to the VeilGuard server and
-executes three image-processing operations:
+A Tkinter-based client that connects to the VeilGuard server and runs 3 operations:
 
-1) Blur Faces (server-side)
-2) Blur Background (server-side)
-3) User ROI Blur (client-side interactive editor; final image is sent to server)
+  1) Blur Faces (server-side, returns ORIGINAL then PROCESSED)
+  2) Blur Background (server-side, returns ORIGINAL then PROCESSED)
+  3) User ROI Blur (client-side editor with mouse; sends ORIGINAL and FINAL)
 
-Features:
-- Encrypted communication (via `Encryption`).
-- Splash screen shown before the login phase.
-- Login via a small Tk window (persisting credentials in creds.txt).
-- Modern UI: choose image, run operations, and see Original vs. Processed previews.
-- Robust threading so the UI remains responsive during long operations.
+Key ideas:
+- Encrypted communication using `Encryption` (send/receive strings + raw bytes).
+- Splash screen before login.
+- Simple login popup; credentials are saved to creds.txt for next time.
+- Modern dark UI with two preview panels: Original (left) and Processed (right).
+- Threading so the UI stays responsive while network operations run.
+- If no image is selected by the user, the client sends "0" so the server uses
+  one of its default images (test15/16/17 on the server folder).
+- For options 1/2 the server returns ORIGINAL first and then PROCESSED, so
+  the client can show both panels even when using server defaults.
 """
 
 # ======================
-# IMPORT STATEMENTS
+# IMPORTS
 # ======================
-from tkinter import Label, Toplevel, ttk, filedialog
 import tkinter as tk
+from tkinter import Toplevel, Label, filedialog, ttk
 import socket
 import os
 import time
 from PIL import Image, ImageTk
-from constants import IP, PORT, CHUNK_SIZE  # CHUNK_SIZE kept for future use
+from constants import IP, PORT, CHUNK_SIZE
 from encrypt import Encryption
 import cv2
 import numpy as np
 import threading
+import io
 import subprocess
 import sys
-import io
 
 
 # ======================
-# TOP-LEVEL UI HELPERS (no nested classes)
-# ======================
-class Tooltip:
-    """Lightweight tooltip helper for Tk widgets."""
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tip = None
-        widget.bind("<Enter>", self._show)
-        widget.bind("<Leave>", self._hide)
-
-    def _show(self, _=None):
-        if self.tip:
-            return
-        self.tip = tk.Toplevel(self.widget)
-        self.tip.overrideredirect(True)
-        self.tip.configure(bg="#111217")
-        lbl = tk.Label(self.tip, text=self.text, bg="#111217", fg="#d9d9d9",
-                       font=("Segoe UI", 9), padx=8, pady=4)
-        lbl.pack()
-        x = self.widget.winfo_rootx() + 10
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
-        self.tip.geometry(f"+{x}+{y}")
-
-    def _hide(self, _=None):
-        if self.tip:
-            self.tip.destroy()
-            self.tip = None
-
-
-# ======================
-# CLIENT CLASS DEFINITION
+# CLIENT CLASS
 # ======================
 class Client:
     def __init__(self):
         """
-        Initialize the client with:
-        - Default image candidates for operations.
-        - Network objects and encryption wrapper.
-        - UI state holders and flags.
+        Prepare:
+        - Network socket + Encryption helper
+        - UI state (selected image; labels for previews; status text; buttons)
+        - Flags for clean shutdown on logout
         """
-        # Default images used if user does not choose one
-        self.usual_images = [
-            r"C:\Users\shapi\Downloads\alin\test15.png",
-            r"C:\Users\shapi\Downloads\alin\test16.png",
-            r"C:\Users\shapi\Downloads\alin\test17.png"
-        ]
-
-        # Networking components
         self.client_socket = None
         self.encryptor = Encryption()
 
@@ -95,12 +59,10 @@ class Client:
         self.preview_orig = None
         self.preview_proc = None
         self.status_var = None
-        self.spinner_label = None
         self.btns = {}
-        self._spinner_job = None
-        self._spinner_phase = 0
+        self.spinner_label = None
 
-        # Theme colors (set by create_styles)
+        # Theme colors (set later by create_styles)
         self._bg = "#0f1115"
         self._panel = "#171923"
         self._panel_hi = "#222533"
@@ -108,39 +70,50 @@ class Client:
         self._muted = "#a9a9b3"
         self._accent = "#7c3aed"
 
+        # Spinner control
+        self._spinner_job = None
+        self._spinner_phase = 0
+
     # ======================
-    # NETWORK CONNECTION
+    # NETWORK
     # ======================
     def connect_to_server(self):
-        """Establish a TCP connection to the server."""
+        """Create a TCP socket and connect to the server defined in constants.py."""
         try:
             self.client_socket = socket.socket()
             self.client_socket.connect((IP, PORT))
-            print("Connected to server at", f"{IP}:{PORT}")
+            print("Connected to server at {}:{}".format(IP, PORT))
         except Exception as e:
-            print(f"Connection failed: {e}")
+            print("Connection failed: {}".format(e))
             self.client_socket = None
 
     # ======================
-    # SPLASH SCREEN
+    # SPLASH
     # ======================
     def show_splash(self):
-        """Display a 400x400 splash screen for ~4 seconds."""
+        """
+        Show a 400x400 splash image for ~4 seconds, then close and continue.
+        This runs in its own short Tk mainloop before the main UI.
+        """
         root = tk.Tk()
-        root.withdraw()  # Hide the main root to display only the splash window
+        root.withdraw()  # Hide the main root
 
         splash = Toplevel(root)
         splash.geometry("400x400")
-        splash.overrideredirect(True)  # No window decorations
+        splash.overrideredirect(True)
 
-        logo = Image.open(r"C:\Users\shapi\Downloads\intro_img.png").resize((400, 400))
-        logo_photo = ImageTk.PhotoImage(logo)
-        label = Label(splash, image=logo_photo)
-        label.image = logo_photo  # Keep reference to avoid garbage collection
-        label.pack()
+        # Update path to your splash image if needed
+        img_path = r"C:\Users\shapi\Downloads\intro_img.png"
+        try:
+            logo = Image.open(img_path).resize((400, 400))
+            logo_photo = ImageTk.PhotoImage(logo)
+            label = Label(splash, image=logo_photo)
+            label.image = logo_photo
+            label.pack()
+        except Exception:
+            Label(splash, text="VeilGuard", font=("Segoe UI", 28)).pack(expand=True)
 
         def close_splash():
-            """Close the splash window and fully destroy the temporary root."""
             splash.destroy()
             root.destroy()
 
@@ -148,17 +121,16 @@ class Client:
         root.mainloop()
 
     # ======================
-    # UI: THEME/STYLES/HEADER
+    # STYLE / UI HELPERS
     # ======================
     def create_styles(self):
-        """Configure a modern dark theme for ttk widgets."""
+        """Apply a simple dark theme to ttk widgets."""
         style = ttk.Style()
         try:
             style.theme_use("clam")
         except Exception:
             pass
 
-        # Colors
         self._bg = "#0f1115"
         self._panel = "#171923"
         self._panel_hi = "#222533"
@@ -166,7 +138,7 @@ class Client:
         self._muted = "#a9a9b3"
         self._accent = "#7c3aed"
 
-        # Window bg
+        # Base window background
         self.ui_root.configure(bg=self._bg)
 
         # Frames / labelframes
@@ -197,56 +169,62 @@ class Client:
         style.configure("Title.TLabel", background=self._bg, foreground="white", font=("Segoe UI Semibold", 20))
 
     def draw_gradient_header(self, parent, width=980, height=90):
-        """Draw a simple left→right gradient header on a Canvas."""
+        """
+        Draw a simple left->right gradient as a header with the app title.
+        This is purely cosmetic to make the UI look more modern.
+        """
         canvas = tk.Canvas(parent, height=height, width=width, highlightthickness=0, bd=0, bg=self._bg)
         canvas.pack(fill=tk.X, expand=False)
-        start = (124, 58, 237)   # #7c3aed
-        end   = (15, 17, 21)     # bg
-        steps = max(1, width)
+
+        # Gradient from purple accent to dark bg
+        start = (124, 58, 237)  # #7c3aed
+        end = (15, 17, 21)      # #0f1115
+        steps = width
         for i in range(steps):
-            r = int(start[0] + (end[0]-start[0]) * (i/steps))
-            g = int(start[1] + (end[1]-start[1]) * (i/steps))
-            b = int(start[2] + (end[2]-start[2]) * (i/steps))
-            canvas.create_line(i, 0, i, height, fill=f"#{r:02x}{g:02x}{b:02x}")
-        canvas.create_text(22, height//2, anchor="w",
+            r = int(start[0] + (end[0] - start[0]) * (i / float(steps)))
+            g = int(start[1] + (end[1] - start[1]) * (i / float(steps)))
+            b = int(start[2] + (end[2] - start[2]) * (i / float(steps)))
+            canvas.create_line(i, 0, i, height, fill="#%02x%02x%02x" % (r, g, b))
+
+        canvas.create_text(22, height // 2, anchor="w",
                            text="VeilGuard — Image Privacy Client",
                            fill="white",
                            font=("Segoe UI Semibold", 18))
         return canvas
 
-    # ======================
-    # UI: SMALL UTILITIES
-    # ======================
     def show_toast(self, text, ms=1800):
-        """Small floating toast message near the bottom-right of the window."""
+        """
+        Small floating message (like a toast). Optional nice feedback for the user.
+        """
         toast = tk.Toplevel(self.ui_root)
         toast.overrideredirect(True)
         toast.configure(bg=self._panel)
         lbl = tk.Label(toast, text=text, bg=self._panel, fg=self._fg, font=("Segoe UI", 10), padx=14, pady=8)
         lbl.pack()
+        # Position near bottom-right
         self.ui_root.update_idletasks()
         x = self.ui_root.winfo_x() + self.ui_root.winfo_width() - toast.winfo_reqwidth() - 20
         y = self.ui_root.winfo_y() + self.ui_root.winfo_height() - toast.winfo_reqheight() - 40
-        toast.geometry(f"+{x}+{y}")
+        toast.geometry("+{}+{}".format(x, y))
         toast.after(ms, toast.destroy)
 
+    # Spinner animation (3 dots) for long operations
     def spinner_start(self):
-        """Start a simple animated status spinner (ellipsis)."""
         if self._spinner_job:
             return
         self._spinner_phase = 0
 
         def tick():
             dots = ["", ".", "..", "..."]
-            if self.spinner_label:
+            try:
                 self.spinner_label.config(text=dots[self._spinner_phase])
+            except Exception:
+                pass
             self._spinner_phase = (self._spinner_phase + 1) % len(dots)
             self._spinner_job = self.ui_root.after(300, tick)
-
         tick()
 
     def spinner_stop(self):
-        """Stop the animated status spinner."""
         if self._spinner_job:
             try:
                 self.ui_root.after_cancel(self._spinner_job)
@@ -254,51 +232,164 @@ class Client:
                 pass
             self._spinner_job = None
         if self.spinner_label:
-            self.spinner_label.config(text="")
+            try:
+                self.spinner_label.config(text="")
+            except Exception:
+                pass
 
-    def ui_set_status(self, msg: str):
-        """Thread-safe setter for the bottom status label."""
+    class Tooltip:
+        """Very small tooltip helper (hover text)."""
+        def __init__(self, widget, text):
+            self.widget = widget
+            self.text = text
+            self.tip = None
+            widget.bind("<Enter>", self.show)
+            widget.bind("<Leave>", self.hide)
+        def show(self, _=None):
+            if self.tip:
+                return
+            self.tip = tk.Toplevel(self.widget)
+            self.tip.overrideredirect(True)
+            self.tip.configure(bg="#111217")
+            lbl = tk.Label(self.tip, text=self.text, bg="#111217", fg="#d9d9d9",
+                           font=("Segoe UI", 9), padx=8, pady=4)
+            lbl.pack()
+            x = self.widget.winfo_rootx() + 10
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            self.tip.geometry("+{}+{}".format(x, y))
+        def hide(self, _=None):
+            if self.tip:
+                self.tip.destroy()
+                self.tip = None
+
+    def ui_set_status(self, msg):
+        """Thread-safe: update the bottom status label from any thread."""
         if self.status_var:
             def _set():
                 self.status_var.set(msg)
             self.ui_root.after(0, _set)
 
-    def ui_enable_controls(self, enable: bool):
-        """Enable/disable buttons and toggle spinner during long operations."""
+    def ui_enable_controls(self, enable):
+        """
+        Enable/disable the main action buttons while an operation runs.
+        Also start/stop the spinner so the user knows something is happening.
+        """
         state = tk.NORMAL if enable else tk.DISABLED
         for b in self.btns.values():
-            b.config(state=state)
+            try:
+                b.config(state=state)
+            except Exception:
+                pass
         if enable:
             self.spinner_stop()
         else:
             self.spinner_start()
 
-    def open_file_no_temp(self, path: str):
-        """Open a file with the OS default app without creating temporary copies."""
-        if sys.platform.startswith("win"):
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.run(["open", path], check=False)
-        else:
-            subprocess.run(["xdg-open", path], check=False)
+    # ======================
+    # UI BUILD
+    # ======================
+    def build_ui(self):
+        """Create the main window, top action bar, previews, and status bar."""
+        self.ui_root = tk.Tk()
+        self.ui_root.title("VeilGuard Client")
+        self.ui_root.geometry("1000x660")
+        self.ui_root.minsize(900, 560)
 
+        self.create_styles()
+
+        # Header
+        header = ttk.Frame(self.ui_root, style="TopBar.TFrame")
+        header.pack(side=tk.TOP, fill=tk.X)
+        self.draw_gradient_header(header, width=self.ui_root.winfo_width(), height=92)
+
+        # Action bar
+        top = ttk.Frame(self.ui_root, style="TopBar.TFrame")
+        top.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(8, 10))
+
+        self.btns["choose"] = ttk.Button(top, text="📂  Choose Image",
+                                         style="Action.TButton",
+                                         command=self.choose_image_dialog)
+        self.btns["choose"].pack(side=tk.LEFT, padx=6)
+
+        self.btns["face"] = ttk.Button(top, text="🎭  Blur Faces",
+                                       style="Action.TButton",
+                                       command=lambda: self.ui_run_async(self.ui_do_face))
+        self.btns["face"].pack(side=tk.LEFT, padx=6)
+
+        self.btns["bg"] = ttk.Button(top, text="🖼️  Blur Background",
+                                     style="Action.TButton",
+                                     command=lambda: self.ui_run_async(self.ui_do_bg))
+        self.btns["bg"].pack(side=tk.LEFT, padx=6)
+
+        self.btns["user"] = ttk.Button(top, text="✂️  User ROI Blur",
+                                       style="Action.TButton",
+                                       command=lambda: self.ui_run_async(self.ui_do_user))
+        self.btns["user"].pack(side=tk.LEFT, padx=6)
+
+        self.btns["logout"] = ttk.Button(top, text="🚪  Logout",
+                                         style="Action.TButton",
+                                         command=lambda: self.ui_run_async(self.ui_do_logout))
+        self.btns["logout"].pack(side=tk.RIGHT, padx=6)
+
+        # Tooltips
+        Client.Tooltip(self.btns["choose"], "Pick an image from disk")
+        Client.Tooltip(self.btns["face"], "Detect and blur all faces (server-side)")
+        Client.Tooltip(self.btns["bg"], "Blur the background; keep people sharp (server-side)")
+        Client.Tooltip(self.btns["user"], "Draw rectangles to blur areas; press ESC to finish (client-side)")
+        Client.Tooltip(self.btns["logout"], "Close session and exit")
+
+        # Main content (two cards)
+        mid = ttk.Frame(self.ui_root)
+        mid.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=8)
+
+        left = ttk.Labelframe(mid, text="Original", style="Card.TLabelframe")
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8), pady=0)
+        right = ttk.Labelframe(mid, text="Processed", style="Card.TLabelframe")
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=0)
+
+        self.preview_orig = ttk.Label(left, background=self._panel)
+        self.preview_orig.pack(fill=tk.BOTH, expand=True)
+        self.preview_proc = ttk.Label(right, background=self._panel)
+        self.preview_proc.pack(fill=tk.BOTH, expand=True)
+
+        # Status bar + spinner
+        bottom = ttk.Frame(self.ui_root)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=16, pady=10)
+        self.status_var = tk.StringVar(value="Ready · Choose an image or use server defaults.")
+        ttk.Label(bottom, textvariable=self.status_var, style="Status.TLabel").pack(side=tk.LEFT)
+        self.spinner_label = ttk.Label(bottom, text="", style="Status.TLabel")
+        self.spinner_label.pack(side=tk.RIGHT)
+
+        # Window close
+        self.ui_root.protocol("WM_DELETE_WINDOW", self.ui_root.destroy)
+        self.ui_root.mainloop()
+
+    # ======================
+    # UI UTILITIES
+    # ======================
     def choose_image_dialog(self):
-        """Open a file picker, set selection, and preview it."""
+        """
+        Let the user pick an image. If successful, show it immediately on the left panel.
+        If the user doesn't pick, operations 1/2 will use server defaults.
+        """
         fp = filedialog.askopenfilename(
             title="Choose image",
             filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp *.gif"), ("All", "*.*")]
         )
         if fp:
             self.selected_image_path = fp
-            self.ui_set_status(f"Selected image: {fp}")
+            self.ui_set_status("Selected image: {}".format(fp))
             try:
                 img = Image.open(fp)
                 self.ui_show_preview(img, is_processed=False)
             except Exception as e:
-                self.ui_set_status(f"Failed to open image: {e}")
+                self.ui_set_status("Failed to open image: {}".format(e))
 
-    def ui_show_preview(self, pil_img: Image.Image, is_processed: bool):
-        """Show a PIL image inside the corresponding preview panel."""
+    def ui_show_preview(self, pil_img, is_processed):
+        """
+        Show a PIL image inside the left (Original) or right (Processed) panel.
+        The image is resized (thumbnail) to fit nicely.
+        """
         max_w, max_h = 420, 280
         im = pil_img.copy()
         im.thumbnail((max_w, max_h))
@@ -313,24 +404,18 @@ class Client:
                 self.preview_orig.image = tk_img
         self.ui_root.after(0, _apply)
 
-    def ui_show_pair(self, orig_pil: Image.Image, proc_pil: Image.Image):
-        """Update both preview panels at once."""
-        self.ui_show_preview(orig_pil, is_processed=False)
-        self.ui_show_preview(proc_pil, is_processed=True)
-
     def ui_run_async(self, target, *args, **kwargs):
         """
-        Run a long operation in a background thread:
-        - Disables UI controls while running.
-        - Re-enables controls afterwards.
-        - Pulls a fresh menu (unless already logged out).
+        Run any long operation in a background thread:
+        - Disable buttons, show spinner
+        - Re-enable and (optionally) re-sync menu at the end
         """
         def runner():
             try:
                 self.ui_enable_controls(False)
                 target(*args, **kwargs)
             finally:
-                if not getattr(self, "logged_out", False):
+                if not self.logged_out:
                     try:
                         self.receive_menu()
                     except Exception:
@@ -339,22 +424,24 @@ class Client:
         threading.Thread(target=runner, daemon=True).start()
 
     # ======================
-    # AUTHENTICATION
+    # LOGIN / MENU
     # ======================
     def send_credentials(self):
         """
-        Send username/password to the server (encrypted).
-        - If creds.txt exists, read from it.
-        - Otherwise, prompt via a small Tk login window and save to creds.txt.
-        - Exit if server reports incorrect password.
+        Send username/password to the server.
+        - If creds.txt exists -> read and use it.
+        - Else -> open a small login window, then save to creds.txt.
+        - If server says "PASSWORD INCORRECT" -> close and exit.
         """
         creds_file = "creds.txt"
+
         if os.path.exists(creds_file):
             with open(creds_file, "r") as f:
                 lines = f.read().strip().split("\n")
                 client_id = lines[0]
                 password = lines[1]
         else:
+            # Tiny login window
             root = tk.Tk()
             root.title("Login")
 
@@ -376,143 +463,193 @@ class Client:
             tk.Button(root, text="Login", command=submit).grid(row=2, column=0, columnspan=2, pady=10)
             root.mainloop()
 
-            client_id = creds["username"]
-            password = creds["password"]
+            client_id = creds.get("username", "")
+            password = creds.get("password", "")
 
             with open(creds_file, "w") as f:
                 f.write(client_id + "\n" + password)
 
+        # Send encrypted
         self.encryptor.send_encrypted_message(self.client_socket, client_id)
         self.encryptor.send_encrypted_message(self.client_socket, password)
 
+        # Read server response
         response = self.encryptor.receive_encrypted_message(self.client_socket)
         print(response)
         if "PASSWORD INCORRECT" in response:
-            self.client_socket.close()
-            exit()
+            try:
+                self.client_socket.close()
+            except Exception:
+                pass
+            raise SystemExit()
 
-    # ======================
-    # MENU HANDLING
-    # ======================
     def receive_menu(self):
-        """Receive and print the server's textual menu. Returns the menu string."""
+        """
+        Read and print the server textual menu. This keeps both sides "in sync"
+        after each operation. Not strictly needed for the UI, but useful.
+        """
         try:
             menu = self.encryptor.receive_encrypted_message(self.client_socket)
             print("\nAvailable operations:")
             print(menu)
             return menu
         except Exception as e:
-            print(f"Menu error: {e}")
+            print("Menu error: {}".format(e))
             return None
 
     # ======================
-    # OPERATION HELPERS
+    # LOW-LEVEL IO HELPERS
     # ======================
-    def pick_source_path(self):
-        """Return a valid image path (selected or one of the defaults)."""
-        if self.selected_image_path and os.path.exists(self.selected_image_path):
-            return self.selected_image_path
-        for p in self.usual_images:
-            if os.path.exists(p):
-                return p
-        raise FileNotFoundError("No valid image found in selected path or defaults.")
+    def _recv_exact(self, n):
+        """
+        Receive exactly n bytes from the socket (or until the socket closes).
+        We loop until we collect n bytes (or the peer closes).
+        """
+        buf = b""
+        while len(buf) < n:
+            chunk = self.client_socket.recv(min(4096, n - len(buf)))
+            if not chunk:
+                break
+            buf += chunk
+        return buf
 
     def recv_size_or_error(self):
-        """Receive an int size or raise on '[ERROR]...' message."""
+        """
+        Read a size string from the server. If the server sent an error message
+        that starts with "[ERROR]", raise RuntimeError. Otherwise, convert to int.
+        """
         s = self.encryptor.receive_encrypted_message(self.client_socket)
         if s.startswith("[ERROR]"):
             raise RuntimeError(s)
         return int(s)
 
     # ======================
-    # UI ACTIONS (OPTIONS 1–4)
+    # OPERATIONS (UI-ACTIONS)
     # ======================
     def ui_do_face(self):
-        """Option 1: Blur Faces (server-side)."""
+        """
+        Option 1 (Blur Faces):
+        1) Send "1" to select the operation.
+        2) If the user selected an image -> send its size and bytes.
+           Otherwise -> send "0" so the server uses a default image.
+        3) Receive ORIGINAL first (size + bytes), display it on the left panel.
+        4) Receive PROCESSED next (size + bytes), display it on the right panel.
+        """
         try:
             self.ui_set_status("Running: Blur Faces...")
             self.encryptor.send_encrypted_message(self.client_socket, "1")
 
-            src = self.pick_source_path()
-            with open(src, "rb") as f:
-                data = f.read()
-            self.ui_show_preview(Image.open(src), is_processed=False)
+            # Use selected image if exists; otherwise let server use default
+            src = self.selected_image_path if (self.selected_image_path and os.path.exists(self.selected_image_path)) else None
+            if src:
+                with open(src, "rb") as f:
+                    data = f.read()
+                self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)
+                self.ui_set_status(ack)
+                self.client_socket.sendall(data)
+            else:
+                self.encryptor.send_encrypted_message(self.client_socket, "0")
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)
+                self.ui_set_status(ack)
 
-            self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
-            ack = self.encryptor.receive_encrypted_message(self.client_socket)
-            self.ui_set_status(ack)
-            self.client_socket.sendall(data)
+            # ORIGINAL first
+            orig_size = self.recv_size_or_error()
+            orig_bytes = self._recv_exact(orig_size)
+            orig_img = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
+            self.ui_show_preview(orig_img, is_processed=False)
 
+            # PROCESSED second
             out_size = self.recv_size_or_error()
-            out = b''
-            while len(out) < out_size:
-                chunk = self.client_socket.recv(4096)
-                if not chunk:
-                    break
-                out += chunk
+            out_bytes = self._recv_exact(out_size)
+            proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
+            self.ui_show_preview(proc_img, is_processed=True)
 
-            proc = Image.open(io.BytesIO(out)).convert("RGB")
-            self.ui_show_preview(proc, is_processed=True)
             self.ui_set_status("Faces blurred successfully.")
-            self.show_toast("Faces blurred successfully")
-
         except Exception as e:
-            self.ui_set_status(f"Face blur failed: {e}")
+            self.ui_set_status("Face blur failed: {}".format(e))
 
     def ui_do_bg(self):
-        """Option 2: Blur Background (server-side)."""
+        """
+        Option 2 (Blur Background):
+        Same IO flow as option 1:
+          - Send "2"
+          - Send image size+bytes OR "0" to use server default
+          - Receive ORIGINAL first (show on the left)
+          - Receive PROCESSED next (show on the right)
+        """
         try:
             self.ui_set_status("Running: Blur Background...")
             self.encryptor.send_encrypted_message(self.client_socket, "2")
 
-            src = self.pick_source_path()
-            with open(src, "rb") as f:
-                data = f.read()
-            self.ui_show_preview(Image.open(src), is_processed=False)
+            src = self.selected_image_path if (self.selected_image_path and os.path.exists(self.selected_image_path)) else None
+            if src:
+                with open(src, "rb") as f:
+                    data = f.read()
+                self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)
+                self.ui_set_status(ack)
+                self.client_socket.sendall(data)
+            else:
+                self.encryptor.send_encrypted_message(self.client_socket, "0")
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)
+                self.ui_set_status(ack)
 
-            self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
-            ack = self.encryptor.receive_encrypted_message(self.client_socket)
-            self.ui_set_status(ack)
-            self.client_socket.sendall(data)
+            # ORIGINAL first
+            orig_size = self.recv_size_or_error()
+            orig_bytes = self._recv_exact(orig_size)
+            orig_img = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
+            self.ui_show_preview(orig_img, is_processed=False)
 
+            # PROCESSED second
             out_size = self.recv_size_or_error()
-            out = b''
-            while len(out) < out_size:
-                chunk = self.client_socket.recv(4096)
-                if not chunk:
-                    break
-                out += chunk
+            out_bytes = self._recv_exact(out_size)
+            proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
+            self.ui_show_preview(proc_img, is_processed=True)
 
-            proc = Image.open(io.BytesIO(out)).convert("RGB")
-            self.ui_show_preview(proc, is_processed=True)
             self.ui_set_status("Background blurred successfully.")
-            self.show_toast("Background blurred successfully")
-
         except Exception as e:
-            self.ui_set_status(f"Background blur failed: {e}")
+            self.ui_set_status("Background blur failed: {}".format(e))
 
     def ui_do_user(self):
-        """Option 3: User ROI Blur (client-side editor, then send final to server)."""
+        """
+        Option 3 (User-selected blur with mouse, local):
+        1) Send "3" and wait for the server's signal string.
+        2) Open a small OpenCV editor:
+           - Click and drag to draw a rectangle.
+           - On release, that region is blurred immediately.
+           - Repeat as needed. Press ESC to finish.
+        3) Send ORIGINAL first (size + bytes), then FINAL (size + bytes).
+        4) Receive the server echo-back of the FINAL image and show it on the right.
+        """
         try:
-            self.ui_set_status("Running: User ROI Blur... (use mouse, press ESC to finish)")
+            self.ui_set_status("Running: User ROI Blur... (use mouse; press ESC to finish)")
             self.encryptor.send_encrypted_message(self.client_socket, "3")
 
-            # Wait for server instruction
             signal = self.encryptor.receive_encrypted_message(self.client_socket)
             self.ui_set_status(signal)
 
-            # Load original locally
-            src = self.pick_source_path()
+            # Load original (if user didn't choose -> ask to choose one now)
+            if not self.selected_image_path or not os.path.exists(self.selected_image_path):
+                self.choose_image_dialog()
+                if not self.selected_image_path or not os.path.exists(self.selected_image_path):
+                    raise RuntimeError("Please choose an image for User ROI Blur.")
+
+            src = self.selected_image_path
             with open(src, "rb") as f:
                 original_bytes = f.read()
-            self.ui_show_preview(Image.open(src), is_processed=False)
+
+            # Show original immediately on the left
+            self.ui_show_preview(Image.open(io.BytesIO(original_bytes)).convert("RGB"), is_processed=False)
 
             img = cv2.imread(src)
             if img is None:
                 raise FileNotFoundError("Image not found or cannot be opened!")
+
             img_display = img.copy()
             drawing = {"active": False, "ix": -1, "iy": -1}
 
+            # Mouse callback: draw rect while dragging; blur region on release
             def draw_rectangle(event, x, y, flags, param):
                 if event == cv2.EVENT_LBUTTONDOWN:
                     drawing["active"] = True
@@ -524,6 +661,7 @@ class Client:
                 elif event == cv2.EVENT_LBUTTONUP:
                     drawing["active"] = False
                     x1, y1, x2, y2 = drawing["ix"], drawing["iy"], x, y
+                    # Normalize bounds (top-left to bottom-right)
                     x1, x2 = sorted([max(0, x1), max(0, x2)])
                     y1, y2 = sorted([max(0, y1), max(0, y2)])
                     roi = img[y1:y2, x1:x2]
@@ -542,6 +680,7 @@ class Client:
                     break
             cv2.destroyAllWindows()
 
+            # Encode final as JPG bytes
             ok, enc = cv2.imencode(".jpg", img)
             if not ok:
                 raise RuntimeError("Encoding failed")
@@ -559,24 +698,21 @@ class Client:
             self.ui_set_status(ack2)
             self.client_socket.sendall(final_bytes)
 
-            # Receive echo-back and preview it
+            # Receive echo-back of FINAL and show on the right
             back_size = self.recv_size_or_error()
-            rec = b''
-            while len(rec) < back_size:
-                chunk = self.client_socket.recv(4096)
-                if not chunk:
-                    break
-                rec += chunk
+            rec = self._recv_exact(back_size)
             proc = Image.open(io.BytesIO(rec)).convert("RGB")
             self.ui_show_preview(proc, is_processed=True)
             self.ui_set_status("User ROI blur done.")
-            self.show_toast("User ROI blur done")
-
         except Exception as e:
-            self.ui_set_status(f"User ROI blur failed: {e}")
+            self.ui_set_status("User ROI blur failed: {}".format(e))
 
     def ui_do_logout(self):
-        """Option 4: Logout gracefully (close socket & UI)."""
+        """
+        Option 4 (Logout):
+        - Send "4" to the server and read its final message.
+        - Mark logged_out, close socket, close UI after a short delay.
+        """
         try:
             self.ui_set_status("Logging out...")
             self.encryptor.send_encrypted_message(self.client_socket, "4")
@@ -586,135 +722,39 @@ class Client:
             self.logged_out = True
             try:
                 self.client_socket.close()
-            except:
+            except Exception:
                 pass
             self.ui_root.after(500, self.ui_root.destroy)
 
     # ======================
-    # BUILD MODERN UI
-    # ======================
-    def build_ui(self):
-        """Build the modern VeilGuard client UI (no keyboard shortcuts)."""
-        self.ui_root = tk.Tk()
-        self.ui_root.title("VeilGuard Client")
-        self.ui_root.geometry("1000x660")
-        self.ui_root.minsize(900, 560)
-
-        # Styles
-        self.create_styles()
-
-        # Header (gradient)
-        header = ttk.Frame(self.ui_root, style="TopBar.TFrame")
-        header.pack(side=tk.TOP, fill=tk.X)
-        self.ui_root.update_idletasks()
-        width = max(980, self.ui_root.winfo_width())
-        self.draw_gradient_header(header, width=width, height=92)
-
-        # Action bar
-        top = ttk.Frame(self.ui_root, style="TopBar.TFrame")
-        top.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(8, 10))
-
-        # Buttons (labels cleaned; no Ctrl hints)
-        self.btns["choose"] = ttk.Button(
-            top, text="📂  Choose Image",
-            style="Action.TButton",
-            command=self.choose_image_dialog
-        )
-        self.btns["choose"].pack(side=tk.LEFT, padx=6)
-
-        self.btns["face"] = ttk.Button(
-            top, text="🎭  Blur Faces",
-            style="Action.TButton",
-            command=lambda: self.ui_run_async(self.ui_do_face)
-        )
-        self.btns["face"].pack(side=tk.LEFT, padx=6)
-
-        self.btns["bg"] = ttk.Button(
-            top, text="🖼️  Blur Background",
-            style="Action.TButton",
-            command=lambda: self.ui_run_async(self.ui_do_bg)
-        )
-        self.btns["bg"].pack(side=tk.LEFT, padx=6)
-
-        self.btns["user"] = ttk.Button(
-            top, text="✂️  User ROI Blur",
-            style="Action.TButton",
-            command=lambda: self.ui_run_async(self.ui_do_user)
-        )
-        self.btns["user"].pack(side=tk.LEFT, padx=6)
-
-        self.btns["logout"] = ttk.Button(
-            top, text="🚪  Logout",
-            style="Action.TButton",
-            command=lambda: self.ui_run_async(self.ui_do_logout)
-        )
-        self.btns["logout"].pack(side=tk.RIGHT, padx=6)
-
-        # Tooltips
-        Tooltip(self.btns["choose"], "Pick an image from disk")
-        Tooltip(self.btns["face"], "Detect and blur all faces (server-side)")
-        Tooltip(self.btns["bg"], "Keep subject sharp, blur the background (server-side)")
-        Tooltip(self.btns["user"], "Draw rectangles to blur areas (client-side). Press ESC to finish.")
-        Tooltip(self.btns["logout"], "Close session and exit")
-
-        # Main content (cards)
-        mid = ttk.Frame(self.ui_root)
-        mid.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=8)
-
-        left = ttk.Labelframe(mid, text="Original", style="Card.TLabelframe")
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8), pady=0)
-        right = ttk.Labelframe(mid, text="Processed", style="Card.TLabelframe")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=0)
-
-        self.preview_orig = ttk.Label(left, background=self._panel)
-        self.preview_orig.pack(fill=tk.BOTH, expand=True)
-        self.preview_proc = ttk.Label(right, background=self._panel)
-        self.preview_proc.pack(fill=tk.BOTH, expand=True)
-
-        # Status bar with spinner
-        bottom = ttk.Frame(self.ui_root)
-        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=16, pady=10)
-        self.status_var = tk.StringVar(value="Ready · Choose an image or use defaults (test15/16/17).")
-        ttk.Label(bottom, textvariable=self.status_var, style="Status.TLabel").pack(side=tk.LEFT)
-        self.spinner_label = ttk.Label(bottom, text="", style="Status.TLabel")
-        self.spinner_label.pack(side=tk.RIGHT)
-
-        # Window close
-        self.ui_root.protocol("WM_DELETE_WINDOW", self.ui_root.destroy)
-
-        # Initial hint
-        self.ui_set_status("Ready · Choose an image or use defaults (test15/16/17).")
-        self.ui_root.mainloop()
-
-
-    # ======================
-    # MAIN CLIENT LOOP
+    # MAIN FLOW
     # ======================
     def run(self):
-        """Main client execution flow."""
+        """
+        Main execution:
+        - Connect
+        - Splash
+        - Login (creds popup if needed)
+        - Pull menu once to sync
+        - Build and run the main UI
+        """
         try:
             self.connect_to_server()
             if not self.client_socket:
                 return
-
             self.show_splash()
             self.send_credentials()
-
-            # Pull initial menu (sync point)
-            self.receive_menu()
-
-            # Launch GUI
+            self.receive_menu()   # initial sync
             self.build_ui()
-
         except KeyboardInterrupt:
             print("\nClient shutting down...")
         except Exception as e:
-            print(f"Fatal error: {e}")
+            print("Fatal error: {}".format(e))
         finally:
-            if hasattr(self, 'client_socket') and self.client_socket:
+            if self.client_socket:
                 try:
                     self.client_socket.close()
-                except:
+                except Exception:
                     pass
 
 
