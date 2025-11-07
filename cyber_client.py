@@ -500,6 +500,19 @@ class Client:
     # ======================
     # LOW-LEVEL IO HELPERS
     # ======================
+    def pick_source_path(self):
+        """
+        Return a path to an image for processing if available, else None.
+        """
+        if self.selected_image_path and os.path.exists(self.selected_image_path):
+            return self.selected_image_path
+
+        for p in getattr(self, "usual_images", []):
+            if os.path.exists(p):
+                return p
+
+        return None  # חשוב: לא לזרוק שגיאה
+
     def _recv_exact(self, n):
         """
         Receive exactly n bytes from the socket (or until the socket closes).
@@ -611,101 +624,67 @@ class Client:
         except Exception as e:
             self.ui_set_status("Background blur failed: {}".format(e))
 
-    def ui_do_user(self):
-        """
-        Option 3 (User-selected blur with mouse, local):
-        1) Send "3" and wait for the server's signal string.
-        2) Open a small OpenCV editor:
-           - Click and drag to draw a rectangle.
-           - On release, that region is blurred immediately.
-           - Repeat as needed. Press ESC to finish.
-        3) Send ORIGINAL first (size + bytes), then FINAL (size + bytes).
-        4) Receive the server echo-back of the FINAL image and show it on the right.
-        """
+    def ui_do_user_server(self):
         try:
-            self.ui_set_status("Running: User ROI Blur... (use mouse; press ESC to finish)")
+            self.ui_set_status("Running: User ROI (server-side)...")
             self.encryptor.send_encrypted_message(self.client_socket, "3")
 
-            signal = self.encryptor.receive_encrypted_message(self.client_socket)
-            self.ui_set_status(signal)
+            # אופציונלי: קבלת READY/INFO
+            _ = self.encryptor.receive_encrypted_message(self.client_socket)
 
-            # Load original (if user didn't choose -> ask to choose one now)
-            if not self.selected_image_path or not os.path.exists(self.selected_image_path):
-                self.choose_image_dialog()
-                if not self.selected_image_path or not os.path.exists(self.selected_image_path):
-                    raise RuntimeError("Please choose an image for User ROI Blur.")
+            src_path = self.pick_source_path()
+            if src_path is None:
+                # אין תמונה – בקש ברירת-מחדל מהשרת
+                self.encryptor.send_encrypted_message(self.client_socket, "0")
 
-            src = self.selected_image_path
-            with open(src, "rb") as f:
-                original_bytes = f.read()
+                # קבל את ה-ORIGINAL מהשרת
+                orig_size = int(self.encryptor.receive_encrypted_message(self.client_socket))
+                orig_bytes = b""
+                while len(orig_bytes) < orig_size:
+                    chunk = self.client_socket.recv(4096)
+                    if not chunk:
+                        break
+                    orig_bytes += chunk
 
-            # Show original immediately on the left
-            self.ui_show_preview(Image.open(io.BytesIO(original_bytes)).convert("RGB"), is_processed=False)
+                from io import BytesIO
+                orig_pil = Image.open(BytesIO(orig_bytes)).convert("RGB")
+                self.ui_show_preview(orig_pil, is_processed=False)
 
-            img = cv2.imread(src)
-            if img is None:
-                raise FileNotFoundError("Image not found or cannot be opened!")
+                # השתמש בתמונה הזו לעורך ה-ROI
+                img_for_editor = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
+                original_bytes_for_server = orig_bytes
+            else:
+                # יש תמונה מקומית – שלח אותה
+                with open(src_path, "rb") as f:
+                    data = f.read()
+                self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)  # "[INFO] Send the image..."
+                self.client_socket.sendall(data)
 
-            img_display = img.copy()
-            drawing = {"active": False, "ix": -1, "iy": -1}
+                # השרת מחזיר את ה-ORIGINAL (לסנכרון/תצוגה)
+                orig_size = int(self.encryptor.receive_encrypted_message(self.client_socket))
+                orig_bytes = b""
+                while len(orig_bytes) < orig_size:
+                    chunk = self.client_socket.recv(4096)
+                    if not chunk:
+                        break
+                    orig_bytes += chunk
 
-            # Mouse callback: draw rect while dragging; blur region on release
-            def draw_rectangle(event, x, y, flags, param):
-                if event == cv2.EVENT_LBUTTONDOWN:
-                    drawing["active"] = True
-                    drawing["ix"], drawing["iy"] = x, y
-                elif event == cv2.EVENT_MOUSEMOVE and drawing["active"]:
-                    nonlocal img_display
-                    img_display = img.copy()
-                    cv2.rectangle(img_display, (drawing["ix"], drawing["iy"]), (x, y), (0, 255, 0), 2)
-                elif event == cv2.EVENT_LBUTTONUP:
-                    drawing["active"] = False
-                    x1, y1, x2, y2 = drawing["ix"], drawing["iy"], x, y
-                    # Normalize bounds (top-left to bottom-right)
-                    x1, x2 = sorted([max(0, x1), max(0, x2)])
-                    y1, y2 = sorted([max(0, y1), max(0, y2)])
-                    roi = img[y1:y2, x1:x2]
-                    if roi.size > 0:
-                        k = 51 if 51 % 2 == 1 else 53
-                        roi_blur = cv2.GaussianBlur(roi, (k, k), 0)
-                        img[y1:y2, x1:x2] = roi_blur
-                        img_display = img.copy()
+                from io import BytesIO
+                orig_pil = Image.open(BytesIO(orig_bytes)).convert("RGB")
+                self.ui_show_preview(orig_pil, is_processed=False)
 
-            cv2.namedWindow("Blur Editor")
-            cv2.setMouseCallback("Blur Editor", draw_rectangle)
-            while True:
-                cv2.imshow("Blur Editor", img_display)
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # ESC
-                    break
-            cv2.destroyAllWindows()
+                img_for_editor = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
+                original_bytes_for_server = orig_bytes
 
-            # Encode final as JPG bytes
-            ok, enc = cv2.imencode(".jpg", img)
-            if not ok:
-                raise RuntimeError("Encoding failed")
-            final_bytes = enc.tobytes()
+            # <<< מכאן המשך הקוד שלך: פתיחת חלון OpenCV לציור מלבנים,
+            #     שליחת רשימת ה-ROIs/מסכה לשרת, קבלת התוצר המעובד,
+            #     והצגת "Processed" מימין. >>>
 
-            # Send ORIGINAL first
-            self.encryptor.send_encrypted_message(self.client_socket, str(len(original_bytes)))
-            ack1 = self.encryptor.receive_encrypted_message(self.client_socket)
-            self.ui_set_status(ack1)
-            self.client_socket.sendall(original_bytes)
-
-            # Then FINAL
-            self.encryptor.send_encrypted_message(self.client_socket, str(len(final_bytes)))
-            ack2 = self.encryptor.receive_encrypted_message(self.client_socket)
-            self.ui_set_status(ack2)
-            self.client_socket.sendall(final_bytes)
-
-            # Receive echo-back of FINAL and show on the right
-            back_size = self.recv_size_or_error()
-            rec = self._recv_exact(back_size)
-            proc = Image.open(io.BytesIO(rec)).convert("RGB")
-            self.ui_show_preview(proc, is_processed=True)
-            self.ui_set_status("User ROI blur done.")
         except Exception as e:
-            self.ui_set_status("User ROI blur failed: {}".format(e))
+            self.ui_set_status(f"User ROI server-side blur failed: {e}")
+
+
 
     def ui_do_logout(self):
         """

@@ -310,6 +310,32 @@ class Server:
     # ======================
     # MediaPipe backends (no fallbacks)
     # ======================
+    def apply_masked_blur(self, bgr, mask_255, ksize):
+        """
+        Receives:
+        - bgr: image (BGR)
+        - mask_255: uint8 mask (0=keep sharp, 255=blur)
+        - ksize: blur kernel (int, יומר ל־odd >=3)
+        Does:
+        - feather mask for soft edges
+        - Gaussian blur background only where mask==1
+        Returns:
+        - composited BGR
+        """
+        H, W = bgr.shape[:2]
+        if mask_255.shape[:2] != (H, W):
+            mask_255 = cv2.resize(mask_255, (W, H), interpolation=cv2.INTER_NEAREST)
+        if mask_255.ndim == 3:
+            mask_255 = cv2.cvtColor(mask_255, cv2.COLOR_BGR2GRAY)
+        keep_blur = (mask_255 > 0).astype(np.uint8) * 255
+        m = self._feather_mask(keep_blur, radius=max(12, min(H, W)//30))
+        m3 = np.dstack([m, m, m])
+        k = self._odd(ksize)
+        blurred = cv2.GaussianBlur(bgr, (k, k), 0)
+        out = (m3 * blurred.astype(np.float32) + (1.0 - m3) * bgr.astype(np.float32))
+        out = np.clip(out, 0, 255).astype(np.uint8)
+        return out
+
     def _mp_face_boxes(self, bgr, conf):
         """
         Run MediaPipe FaceDetection with model_selection 0 and 1
@@ -628,68 +654,44 @@ class Server:
         except Exception as e:
             self.encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id):
-        """
-        User ROI blur flow (client-side editor):
-        - Server sends instruction message.
-        - Client sends ORIGINAL size+bytes, then FINAL size+bytes.
-        - Server saves both and echoes FINAL back (size+bytes).
-        """
-        try:
-            self.encryptor.send_encrypted_message(
-                client_socket,
-                "[CLIENT_INTERACTIVE] Do local ROI blur. Then send ORIGINAL first, then FINAL on ESC."
-            )
+    def handle_option_3_user_selected_blur_server(self, client_socket, client_id):
+        # שולחים הודעת הוראות/READY (אם כבר יש – השאר)
+        self.encryptor.send_encrypted_message(
+            client_socket,
+            "[SERVER_READY] ROI server-side: send '0' for default image or <N> then N bytes."
+        )
 
-            # Receive ORIGINAL
-            orig_size = int(self.encryptor.receive_encrypted_message(client_socket))
-            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send ORIGINAL...")
-            orig_buf = b""
-            remaining = orig_size
+        # קבל מהלקוח את הבחירה: "0" או גודל תמונה
+        size_str = self.encryptor.receive_encrypted_message(client_socket)
+
+        if size_str == "0":
+            # ברירת מחדל מהשרת
+            buf = self._load_server_default_image_bytes()
+        else:
+            # קריאת N בתים מהלקוח
+            image_size = int(size_str)
+            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
+            buf, remaining = b"", image_size
             while remaining > 0:
                 chunk = client_socket.recv(min(4096, remaining))
                 if not chunk:
                     break
-                orig_buf += chunk
+                buf += chunk
                 remaining -= len(chunk)
 
-            orig_path = self.save_raw_image_bytes(orig_buf, base_dir="processed",
-                                                  prefix="%s_userblur_original" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
-            self.update_gui_log("Client %s: User blur (original) -> %s" % (client_id, orig_path))
+        # שמירת ה-ORIGINAL (לבסיס נתונים/היסטוריה וכו')
+        orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
+                                            prefix=f"{client_id}_roi_original")
+        self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
 
-            # Receive FINAL
-            fin_size = int(self.encryptor.receive_encrypted_message(client_socket))
-            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send FINAL...")
-            fin_buf = b""
-            remaining2 = fin_size
-            while remaining2 > 0:
-                chunk = client_socket.recv(min(4096, remaining2))
-                if not chunk:
-                    break
-                fin_buf += chunk
-                remaining2 -= len(chunk)
+        # שלח ללקוח את ה-ORIGINAL כדי שיוכל להציג משמאל ולצייר ROI
+        self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
+        client_socket.sendall(buf)
 
-            np_arr = np.frombuffer(fin_buf, dtype=np.uint8)
-            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if img_bgr is None:
-                raise ValueError("Failed to decode final user-blurred image")
+        # >>> מכאן המשך הפרוטוקול שלך: קבלת רשימת מלבנים/מסכה מהלקוח,
+        #     החלת הטשטוש בצד השרת, שמירה, שליחה חזרה ללקוח וכו'.
 
-            fin_path = self.save_bgr_image(img_bgr, base_dir="processed",
-                                           prefix="%s_userblur_processed" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 3, fin_path)
-            self.update_gui_log("Client %s: User blur (processed) -> %s" % (client_id, fin_path))
 
-            # Echo FINAL
-            ok, enc = cv2.imencode(".jpg", img_bgr)
-            if not ok:
-                raise ValueError("imencode failed")
-            out_bytes = enc.tobytes()
-            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
-            client_socket.sendall(out_bytes)
-
-        except Exception as e:
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
     def handle_logout(self, client_socket, client_id):
         """
