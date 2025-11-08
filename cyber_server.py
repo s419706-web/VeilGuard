@@ -25,7 +25,7 @@
 # - MediaPipe is assumed to be installed on the SERVER machine.
 # - All debug prints removed (only GUI log).
 # - No type annotations to remain compatible with older Python interpreters.
-
+import json
 import socket
 import threading
 import tkinter as tk
@@ -654,21 +654,18 @@ class Server:
         except Exception as e:
             self.encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-    def handle_option_3_user_selected_blur_server(self, client_socket, client_id):
-        # שולחים הודעת הוראות/READY (אם כבר יש – השאר)
+   
+
+    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id):
         self.encryptor.send_encrypted_message(
             client_socket,
             "[SERVER_READY] ROI server-side: send '0' for default image or <N> then N bytes."
         )
 
-        # קבל מהלקוח את הבחירה: "0" או גודל תמונה
         size_str = self.encryptor.receive_encrypted_message(client_socket)
-
         if size_str == "0":
-            # ברירת מחדל מהשרת
             buf = self._load_server_default_image_bytes()
         else:
-            # קריאת N בתים מהלקוח
             image_size = int(size_str)
             self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
             buf, remaining = b"", image_size
@@ -679,18 +676,65 @@ class Server:
                 buf += chunk
                 remaining -= len(chunk)
 
-        # שמירת ה-ORIGINAL (לבסיס נתונים/היסטוריה וכו')
+        # שמירת ORIGINAL
         orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
                                             prefix=f"{client_id}_roi_original")
         self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
 
-        # שלח ללקוח את ה-ORIGINAL כדי שיוכל להציג משמאל ולצייר ROI
+        # שליחת ORIGINAL ללקוח (לתצוגה/בחירת ROI)
         self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
         client_socket.sendall(buf)
 
-        # >>> מכאן המשך הפרוטוקול שלך: קבלת רשימת מלבנים/מסכה מהלקוח,
-        #     החלת הטשטוש בצד השרת, שמירה, שליחה חזרה ללקוח וכו'.
+        # === קבלת רשימת ה-ROI מהקליינט (כ-JSON) ===
+        cmd = self.encryptor.receive_encrypted_message(client_socket)  # מצפים ל"[C_RECTS]"
+        if cmd != "[C_RECTS]":
+            self.encryptor.send_encrypted_message(client_socket, "[ERROR] Expected [C_RECTS]")
+            return
 
+        rects_json = self.encryptor.receive_encrypted_message(client_socket)
+        try:
+            rects = json.loads(rects_json)  # פורמט: [[x,y,w,h], ...]
+            assert isinstance(rects, list)
+        except Exception as e:
+            self.encryptor.send_encrypted_message(client_socket, f"[ERROR] Bad ROI JSON: {e}")
+            return
+
+        # === עיבוד: טשטוש אזורי ROI על ה-ORIGINAL בצד השרת ===
+        arr = np.frombuffer(buf, dtype=np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if bgr is None:
+            self.encryptor.send_encrypted_message(client_socket, "[ERROR] Decode ORIGINAL failed")
+            return
+
+        out = bgr.copy()
+        for r in rects:
+            if not (isinstance(r, (list, tuple)) and len(r) == 4):
+                continue
+            x, y, w, h = map(int, r)
+            x = max(0, min(x, out.shape[1]-1))
+            y = max(0, min(y, out.shape[0]-1))
+            w = max(0, min(w, out.shape[1]-x))
+            h = max(0, min(h, out.shape[0]-y))
+            if w <= 0 or h <= 0:
+                continue
+            k = max(21, 2 * (min(w, h)//3) + 1)  # odd >=21, מותאם קצת לגודל
+            patch = out[y:y+h, x:x+w]
+            patch_blur = cv2.GaussianBlur(patch, (k, k), 0)
+            out[y:y+h, x:x+w] = patch_blur
+
+        # שמירה בבסיס נתונים/דיסק
+        out_path = self.save_bgr_image(out, base_dir="processed",
+                                    prefix=f"{client_id}_roi_processed")
+        self.db_manager.insert_decrypted_media(client_id, 3, out_path)
+
+        # שליחת PROCESSED ללקוח
+        ok, enc = cv2.imencode(".jpg", out)
+        if not ok:
+            self.encryptor.send_encrypted_message(client_socket, "[ERROR] imencode failed")
+            return
+        out_bytes = enc.tobytes()
+        self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+        client_socket.sendall(out_bytes)
 
 
     def handle_logout(self, client_socket, client_id):

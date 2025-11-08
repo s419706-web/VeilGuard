@@ -22,6 +22,7 @@ Key ideas:
 # ======================
 # IMPORTS
 # ======================
+import json
 import tkinter as tk
 from tkinter import Toplevel, Label, filedialog, ttk
 import socket
@@ -624,66 +625,61 @@ class Client:
         except Exception as e:
             self.ui_set_status("Background blur failed: {}".format(e))
 
-    def ui_do_user_server(self):
+   
+
+    def ui_do_user(self):
         try:
             self.ui_set_status("Running: User ROI (server-side)...")
             self.encryptor.send_encrypted_message(self.client_socket, "3")
 
-            # אופציונלי: קבלת READY/INFO
+            # 1) READY
             _ = self.encryptor.receive_encrypted_message(self.client_socket)
 
+            # 2) מקור תמונה
             src_path = self.pick_source_path()
             if src_path is None:
-                # אין תמונה – בקש ברירת-מחדל מהשרת
                 self.encryptor.send_encrypted_message(self.client_socket, "0")
-
-                # קבל את ה-ORIGINAL מהשרת
-                orig_size = int(self.encryptor.receive_encrypted_message(self.client_socket))
-                orig_bytes = b""
-                while len(orig_bytes) < orig_size:
-                    chunk = self.client_socket.recv(4096)
-                    if not chunk:
-                        break
-                    orig_bytes += chunk
-
-                from io import BytesIO
-                orig_pil = Image.open(BytesIO(orig_bytes)).convert("RGB")
-                self.ui_show_preview(orig_pil, is_processed=False)
-
-                # השתמש בתמונה הזו לעורך ה-ROI
-                img_for_editor = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
-                original_bytes_for_server = orig_bytes
             else:
-                # יש תמונה מקומית – שלח אותה
                 with open(src_path, "rb") as f:
                     data = f.read()
                 self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)  # "[INFO] Send the image..."
                 self.client_socket.sendall(data)
 
-                # השרת מחזיר את ה-ORIGINAL (לסנכרון/תצוגה)
-                orig_size = int(self.encryptor.receive_encrypted_message(self.client_socket))
-                orig_bytes = b""
-                while len(orig_bytes) < orig_size:
-                    chunk = self.client_socket.recv(4096)
-                    if not chunk:
-                        break
-                    orig_bytes += chunk
+            # 3) קבלת ORIGINAL לתצוגה ולבחירת ROI
+            orig_size = self.recv_size_or_error()
+            orig_bytes = self._recv_exact(orig_size)
+            orig_pil = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
+            self.ui_show_preview(orig_pil, is_processed=False)
 
-                from io import BytesIO
-                orig_pil = Image.open(BytesIO(orig_bytes)).convert("RGB")
-                self.ui_show_preview(orig_pil, is_processed=False)
+            img_bgr = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                raise RuntimeError("Failed to decode ORIGINAL")
 
-                img_for_editor = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
-                original_bytes_for_server = orig_bytes
+            # 4) בחירת מלבנים (ENTER לאישור, ESC לביטול)
+            cv2.namedWindow("Draw ROIs (ENTER=OK, ESC=cancel)", cv2.WINDOW_NORMAL)
+            rois = cv2.selectROIs("Draw ROIs (ENTER=OK, ESC=cancel)", img_bgr, False, False)
+            cv2.destroyAllWindows()
 
-            # <<< מכאן המשך הקוד שלך: פתיחת חלון OpenCV לציור מלבנים,
-            #     שליחת רשימת ה-ROIs/מסכה לשרת, קבלת התוצר המעובד,
-            #     והצגת "Processed" מימין. >>>
+            rects = []
+            if rois is not None and len(rois) > 0:
+                for (x, y, w, h) in rois:
+                    if int(w) > 0 and int(h) > 0:
+                        rects.append([int(x), int(y), int(w), int(h)])
 
+            # 5) שליחת ה-ROI לשרת (כ-JSON)
+            self.encryptor.send_encrypted_message(self.client_socket, "[C_RECTS]")
+            self.encryptor.send_encrypted_message(self.client_socket, json.dumps(rects))
+
+            # 6) קבלת PROCESSED מהשרת והצגה
+            out_size = self.recv_size_or_error()
+            out_bytes = self._recv_exact(out_size)
+            proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
+            self.ui_show_preview(proc_img, is_processed=True)
+
+            self.ui_set_status("User ROI: processed on server.")
         except Exception as e:
             self.ui_set_status(f"User ROI server-side blur failed: {e}")
-
 
 
     def ui_do_logout(self):
