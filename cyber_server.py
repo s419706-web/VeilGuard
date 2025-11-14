@@ -657,15 +657,20 @@ class Server:
    
 
     def handle_option_3_user_selected_blur_receive(self, client_socket, client_id):
+        # Notify the client that the server is ready for ROI processing.
+        # The client can send "0" to use a default image or send <N> followed by N bytes for a custom image.
         self.encryptor.send_encrypted_message(
             client_socket,
             "[SERVER_READY] ROI server-side: send '0' for default image or <N> then N bytes."
         )
 
+        # Receive the client’s choice (either "0" or an image size)
         size_str = self.encryptor.receive_encrypted_message(client_socket)
         if size_str == "0":
+            # Use one of the server’s default test images
             buf = self._load_server_default_image_bytes()
         else:
+            # Receive the exact number of bytes specified by the client
             image_size = int(size_str)
             self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
             buf, remaining = b"", image_size
@@ -676,30 +681,31 @@ class Server:
                 buf += chunk
                 remaining -= len(chunk)
 
-        # שמירת ORIGINAL
+        # Save the ORIGINAL image (for audit/history)
         orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
                                             prefix=f"{client_id}_roi_original")
         self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
 
-        # שליחת ORIGINAL ללקוח (לתצוגה/בחירת ROI)
+        # Send the ORIGINAL image back to the client for display and ROI selection
         self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
         client_socket.sendall(buf)
 
-        # === קבלת רשימת ה-ROI מהקליינט (כ-JSON) ===
-        cmd = self.encryptor.receive_encrypted_message(client_socket)  # מצפים ל"[C_RECTS]"
+        # === Receive the ROI list from the client as JSON ===
+        cmd = self.encryptor.receive_encrypted_message(client_socket)  # Expecting "[C_RECTS]"
         if cmd != "[C_RECTS]":
             self.encryptor.send_encrypted_message(client_socket, "[ERROR] Expected [C_RECTS]")
             return
 
+        # Parse the ROI list
         rects_json = self.encryptor.receive_encrypted_message(client_socket)
         try:
-            rects = json.loads(rects_json)  # פורמט: [[x,y,w,h], ...]
+            rects = json.loads(rects_json)  # Format: [[x, y, w, h], ...]
             assert isinstance(rects, list)
         except Exception as e:
             self.encryptor.send_encrypted_message(client_socket, f"[ERROR] Bad ROI JSON: {e}")
             return
 
-        # === עיבוד: טשטוש אזורי ROI על ה-ORIGINAL בצד השרת ===
+        # === Image processing: apply blur to ROI regions on the server ===
         arr = np.frombuffer(buf, dtype=np.uint8)
         bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -711,23 +717,26 @@ class Server:
             if not (isinstance(r, (list, tuple)) and len(r) == 4):
                 continue
             x, y, w, h = map(int, r)
-            x = max(0, min(x, out.shape[1]-1))
-            y = max(0, min(y, out.shape[0]-1))
-            w = max(0, min(w, out.shape[1]-x))
-            h = max(0, min(h, out.shape[0]-y))
+            # Clamp ROI coordinates within image bounds
+            x = max(0, min(x, out.shape[1] - 1))
+            y = max(0, min(y, out.shape[0] - 1))
+            w = max(0, min(w, out.shape[1] - x))
+            h = max(0, min(h, out.shape[0] - y))
             if w <= 0 or h <= 0:
                 continue
-            k = max(21, 2 * (min(w, h)//3) + 1)  # odd >=21, מותאם קצת לגודל
-            patch = out[y:y+h, x:x+w]
-            patch_blur = cv2.GaussianBlur(patch, (k, k), 0)
-            out[y:y+h, x:x+w] = patch_blur
 
-        # שמירה בבסיס נתונים/דיסק
+            # Choose a Gaussian blur kernel size proportional to ROI size (odd number >= 21)
+            k = max(21, 2 * (min(w, h) // 3) + 1)
+            patch = out[y:y + h, x:x + w]
+            patch_blur = cv2.GaussianBlur(patch, (k, k), 0)
+            out[y:y + h, x:x + w] = patch_blur
+
+        # Save the PROCESSED image (for history/logs)
         out_path = self.save_bgr_image(out, base_dir="processed",
                                     prefix=f"{client_id}_roi_processed")
         self.db_manager.insert_decrypted_media(client_id, 3, out_path)
 
-        # שליחת PROCESSED ללקוח
+        # Send the processed image back to the client
         ok, enc = cv2.imencode(".jpg", out)
         if not ok:
             self.encryptor.send_encrypted_message(client_socket, "[ERROR] imencode failed")
@@ -735,7 +744,6 @@ class Server:
         out_bytes = enc.tobytes()
         self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
         client_socket.sendall(out_bytes)
-
 
     def handle_logout(self, client_socket, client_id):
         """

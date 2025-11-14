@@ -306,6 +306,16 @@ class Client:
         # Action bar
         top = ttk.Frame(self.ui_root, style="TopBar.TFrame")
         top.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(8, 10))
+        self.btns["capture"] = ttk.Button(
+        top, text="📸  Capture from Camera",
+        style="Action.TButton",
+        command=lambda: self.ui_run_async(self.ui_capture_camera, needs_menu_sync=False)
+        )
+        self.btns["capture"].pack(side=tk.LEFT, padx=6)
+
+
+        Client.Tooltip(self.btns["capture"], "Take a photo using your webcam")
+
 
         self.btns["choose"] = ttk.Button(top, text="📂  Choose Image",
                                          style="Action.TButton",
@@ -368,6 +378,56 @@ class Client:
     # ======================
     # UI UTILITIES
     # ======================
+    def ui_capture_camera(self):
+        """
+        Capture a single image from the computer's webcam.
+        Saves it as 'captured.jpg' and sets it as the selected image.
+        """
+        try:
+            self.ui_set_status("Opening camera...")
+            cap = cv2.VideoCapture(0)
+
+            if not cap.isOpened():
+                self.ui_set_status("❌ Failed to access the camera.")
+                return
+
+            self.ui_set_status("Press SPACE to capture, ESC to cancel.")
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    self.ui_set_status("❌ Camera read failed.")
+                    break
+
+                cv2.imshow("Press SPACE to capture / ESC to cancel", frame)
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == 27:  # ESC
+                    self.ui_set_status("Camera capture canceled.")
+                    break
+                elif key == 32:  # SPACE
+                    # Save the captured image
+                    save_path = os.path.join(os.getcwd(), "captured.jpg")
+                    cv2.imwrite(save_path, frame)
+                    self.selected_image_path = save_path
+                    self.ui_set_status(f"Captured and selected image: {save_path}")
+
+                    # Show the captured image in the left preview
+                    img = Image.open(save_path)
+                    self.ui_show_preview(img, is_processed=False)
+                    break
+
+            cap.release()
+            cv2.destroyAllWindows()
+
+        except Exception as e:
+            self.ui_set_status(f"Camera capture failed: {e}")
+            try:
+                cap.release()
+            except Exception:
+                pass
+            cv2.destroyAllWindows()
+
     def choose_image_dialog(self):
         """
         Let the user pick an image. If successful, show it immediately on the left panel.
@@ -405,18 +465,18 @@ class Client:
                 self.preview_orig.image = tk_img
         self.ui_root.after(0, _apply)
 
-    def ui_run_async(self, target, *args, **kwargs):
+    def ui_run_async(self, target, *args, needs_menu_sync=True, **kwargs):
         """
         Run any long operation in a background thread:
         - Disable buttons, show spinner
-        - Re-enable and (optionally) re-sync menu at the end
+        - Optionally sync the server menu at the end (only for network ops)
         """
         def runner():
             try:
                 self.ui_enable_controls(False)
                 target(*args, **kwargs)
             finally:
-                if not self.logged_out:
+                if not self.logged_out and needs_menu_sync:
                     try:
                         self.receive_menu()
                     except Exception:
