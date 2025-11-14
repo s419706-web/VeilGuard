@@ -25,6 +25,7 @@
 # - MediaPipe is assumed to be installed on the SERVER machine.
 # - All debug prints removed (only GUI log).
 # - No type annotations to remain compatible with older Python interpreters.
+
 import json
 import socket
 import threading
@@ -49,7 +50,7 @@ import mediapipe as mp  # Assumed installed on server
 class Server:
     def __init__(self):
         """
-        Initialize database, crypto, basic GUI containers, and default server images.
+        Initialize database, basic GUI containers, and default server images.
         """
         # --- Database
         self.db_manager = DatabaseManager("localhost", "root", "davids74", "mysql")
@@ -60,8 +61,8 @@ class Server:
             # If table already populated, ignore.
             pass
 
-        # --- Encryption wrapper
-        self.encryptor = Encryption()
+        # DB lock for thread-safe access
+        self.db_lock = threading.Lock()
 
         # --- Tkinter GUI basics (created later fully in create_gui)
         self.root = tk.Tk()
@@ -115,7 +116,8 @@ class Server:
         """Rebuild the clients list from DB."""
         try:
             self.client_listbox.delete(0, tk.END)
-            clients = self.db_manager.get_rows_with_value("clients", "1", "1")
+            with self.db_lock:
+                clients = self.db_manager.get_rows_with_value("clients", "1", "1")
             for client in clients:
                 self.client_listbox.insert(tk.END, client[0])
         except Exception:
@@ -123,7 +125,8 @@ class Server:
 
     def show_client_details(self, client_id):
         """Show a popup window with DB info about a specific client."""
-        data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
+        with self.db_lock:
+            data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
         if not data:
             return
 
@@ -179,7 +182,8 @@ class Server:
         lb = Listbox(w, height=15, width=80, bg="black", fg="white", selectbackground="gray")
         lb.pack(padx=10, pady=5, expand=True, fill="both")
 
-        rows = self.db_manager.get_rows_with_value("decrypted_media", "user_id", client_id)
+        with self.db_lock:
+            rows = self.db_manager.get_rows_with_value("decrypted_media", "user_id", client_id)
         if not rows:
             lb.insert(tk.END, "No images found for this client.")
             return
@@ -315,7 +319,7 @@ class Server:
         Receives:
         - bgr: image (BGR)
         - mask_255: uint8 mask (0=keep sharp, 255=blur)
-        - ksize: blur kernel (int, יומר ל־odd >=3)
+        - ksize: blur kernel (int, normalized to odd >=3)
         Does:
         - feather mask for soft edges
         - Gaussian blur background only where mask==1
@@ -393,7 +397,6 @@ class Server:
         if not boxes:
             return bgr.copy()
 
-        # Build one union mask of ellipses
         mask = np.zeros((H, W), dtype=np.uint8)
         for (x, y, w, h) in boxes:
             x, y, w, h = self._expand_box(x, y, w, h, W, H)
@@ -401,11 +404,9 @@ class Server:
             axes = (int(w * 0.56), int(h * 0.72))
             cv2.ellipse(mask, (cx, cy), axes, 0, 0, 360, 255, -1)
 
-        # Soft edges
         m = self._feather_mask(mask, radius=max(12, min(H, W) // 30))
         m3 = np.dstack([m, m, m])
 
-        # Kernel size: automatic if None; otherwise normalize to odd >= 3
         k_auto = self._odd(max(19, min(101, int(min(H, W) * 0.05))))
         if ksize is None:
             k = k_auto
@@ -445,35 +446,42 @@ class Server:
     # ======================
     def handle_client(self, client_socket):
         client_id = 'unknown'
+        encryptor = Encryption()  # per-client encryption instance
         try:
             # --- Authentication
-            username = self.encryptor.receive_encrypted_message(client_socket)
-            password = self.encryptor.receive_encrypted_message(client_socket)
+            username = encryptor.receive_encrypted_message(client_socket)
+            password = encryptor.receive_encrypted_message(client_socket)
             hashed_password = get_hash_value(password)
 
             client_ip, client_port = client_socket.getpeername()
-            existing = self.db_manager.get_rows_with_value("clients", "client_id", username)
+            with self.db_lock:
+                existing = self.db_manager.get_rows_with_value("clients", "client_id", username)
 
             if existing:
                 stored_hash = existing[0][6]
                 if stored_hash != hashed_password:
-                    self.encryptor.send_encrypted_message(client_socket, "PASSWORD INCORRECT. DISCONNECTING.")
+                    encryptor.send_encrypted_message(client_socket, "PASSWORD INCORRECT. DISCONNECTING.")
                     client_socket.close()
                     return
                 else:
-                    self.db_manager.update_row("clients", "client_id", username,
-                                               ["last_seen"], [datetime.datetime.now()])
-                    self.encryptor.send_encrypted_message(client_socket, "WELCOME BACK")
+                    with self.db_lock:
+                        self.db_manager.update_row("clients", "client_id", username,
+                                                   ["last_seen"], [datetime.datetime.now()])
+                    encryptor.send_encrypted_message(client_socket, "WELCOME BACK")
                     client_status = "EXISTING"
                     total_actions = existing[0][5]
             else:
-                self.db_manager.insert_row(
-                    "clients",
-                    "(client_id, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash)",
-                    "(%s, %s, %s, %s, %s, %s, %s)",
-                    (username, client_ip, client_port, datetime.datetime.now(), False, 0, hashed_password)
+                with self.db_lock:
+                    self.db_manager.insert_row(
+                        "clients",
+                        "(client_id, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash)",
+                        "(%s, %s, %s, %s, %s, %s, %s)",
+                        (username, client_ip, client_port, datetime.datetime.now(), False, 0, hashed_password)
+                    )
+                encryptor.send_encrypted_message(
+                    client_socket,
+                    "WELCOME TO VeilGuard SERVER! NEW ACCOUNT CREATED."
                 )
-                self.encryptor.send_encrypted_message(client_socket, "WELCOME TO VeilGuard SERVER! NEW ACCOUNT CREATED.")
                 client_status = "NEW"
                 total_actions = 0
 
@@ -484,30 +492,31 @@ class Server:
             # --- Main interaction loop
             while True:
                 try:
-                    self.encryptor.send_encrypted_message(
+                    encryptor.send_encrypted_message(
                         client_socket,
                         "\n1: Blur Faces\n2: Blur Background\n3: User-Selected Blur\n4: Logout"
                     )
-                    option = self.encryptor.receive_encrypted_message(client_socket)
+                    option = encryptor.receive_encrypted_message(client_socket)
 
                     if option == "1":
-                        self.handle_option_1_blur_faces(client_socket, client_id)
+                        self.handle_option_1_blur_faces(client_socket, client_id, encryptor)
                         total_actions += 1
                     elif option == "2":
-                        self.handle_option_2_blur_background(client_socket, client_id)
+                        self.handle_option_2_blur_background(client_socket, client_id, encryptor)
                         total_actions += 1
                     elif option == "3":
-                        self.handle_option_3_user_selected_blur_receive(client_socket, client_id)
+                        self.handle_option_3_user_selected_blur_receive(client_socket, client_id, encryptor)
                         total_actions += 1
                     elif option == "4":
-                        self.handle_logout(client_socket, client_id)
+                        self.handle_logout(client_socket, client_id, encryptor)
                         break
                     else:
-                        self.encryptor.send_encrypted_message(client_socket, "Invalid option.")
+                        encryptor.send_encrypted_message(client_socket, "Invalid option.")
 
                     if option in ("1", "2", "3"):
-                        self.db_manager.update_row("clients", "client_id", client_id,
-                                                   ["total_sent_media"], [total_actions])
+                        with self.db_lock:
+                            self.db_manager.update_row("clients", "client_id", client_id,
+                                                       ["total_sent_media"], [total_actions])
 
                 except (ConnectionResetError, socket.error):
                     self.update_gui_log("Client %s disconnected abruptly." % client_id)
@@ -515,7 +524,7 @@ class Server:
                 except Exception as e:
                     self.update_gui_log("Error with client %s: %s" % (client_id, str(e)))
                     try:
-                        self.encryptor.send_encrypted_message(client_socket, "[SERVER ERROR] %s" % str(e))
+                        encryptor.send_encrypted_message(client_socket, "[SERVER ERROR] %s" % str(e))
                     except Exception:
                         pass
                     break
@@ -534,7 +543,7 @@ class Server:
     # ======================
     # Command handlers (1/2/3/4)
     # ======================
-    def handle_option_1_blur_faces(self, client_socket, client_id):
+    def handle_option_1_blur_faces(self, client_socket, client_id, encryptor):
         """
         Faces blur flow:
         - Read size: "0" for default image, or "<N>" and then read N bytes.
@@ -544,15 +553,15 @@ class Server:
         - Send ORIGINAL first, then PROCESSED
         """
         try:
-            size_str = self.encryptor.receive_encrypted_message(client_socket)
+            size_str = encryptor.receive_encrypted_message(client_socket)
             use_default = (size_str == "0")
 
             if use_default:
-                self.encryptor.send_encrypted_message(client_socket, "[INFO] Using server default image...")
+                encryptor.send_encrypted_message(client_socket, "[INFO] Using server default image...")
                 buf = self._load_server_default_image_bytes()
             else:
                 image_size = int(size_str)
-                self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
+                encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
                 buf = b""
                 remaining = image_size
                 while remaining > 0:
@@ -565,7 +574,8 @@ class Server:
             # Save ORIGINAL
             orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
                                                   prefix="%s_face_original" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 101, orig_path)
+            with self.db_lock:
+                self.db_manager.insert_decrypted_media(client_id, 101, orig_path)
             self.update_gui_log("Client %s: Face blur (original) -> %s" % (client_id, orig_path))
 
             # Decode + process
@@ -578,11 +588,12 @@ class Server:
             # Save PROCESSED
             out_path = self.save_bgr_image(out_bgr, base_dir="processed",
                                            prefix="%s_face_processed" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 1, out_path)
+            with self.db_lock:
+                self.db_manager.insert_decrypted_media(client_id, 1, out_path)
             self.update_gui_log("Client %s: Face blur (processed) -> %s" % (client_id, out_path))
 
             # Send ORIGINAL
-            self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
+            encryptor.send_encrypted_message(client_socket, str(len(buf)))
             client_socket.sendall(buf)
 
             # Send PROCESSED
@@ -590,13 +601,13 @@ class Server:
             if not ok:
                 raise ValueError("imencode failed")
             out_bytes = enc.tobytes()
-            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+            encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
             client_socket.sendall(out_bytes)
 
         except Exception as e:
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
+            encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-    def handle_option_2_blur_background(self, client_socket, client_id):
+    def handle_option_2_blur_background(self, client_socket, client_id, encryptor):
         """
         Background blur flow:
         - Read size: "0" for default image, or "<N>" and then read N bytes.
@@ -606,15 +617,15 @@ class Server:
         - Send ORIGINAL first, then PROCESSED
         """
         try:
-            size_str = self.encryptor.receive_encrypted_message(client_socket)
+            size_str = encryptor.receive_encrypted_message(client_socket)
             use_default = (size_str == "0")
 
             if use_default:
-                self.encryptor.send_encrypted_message(client_socket, "[INFO] Using server default image...")
+                encryptor.send_encrypted_message(client_socket, "[INFO] Using server default image...")
                 buf = self._load_server_default_image_bytes()
             else:
                 image_size = int(size_str)
-                self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
+                encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
                 buf = b""
                 remaining = image_size
                 while remaining > 0:
@@ -627,7 +638,8 @@ class Server:
             # Save ORIGINAL
             orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
                                                   prefix="%s_background_original" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 102, orig_path)
+            with self.db_lock:
+                self.db_manager.insert_decrypted_media(client_id, 102, orig_path)
             self.update_gui_log("Client %s: Background blur (original) -> %s" % (client_id, orig_path))
 
             # Process (keep persons sharp)
@@ -636,11 +648,12 @@ class Server:
             # Save PROCESSED
             out_path = self.save_bgr_image(out_bgr, base_dir="processed",
                                            prefix="%s_background_processed" % client_id)
-            self.db_manager.insert_decrypted_media(client_id, 2, out_path)
+            with self.db_lock:
+                self.db_manager.insert_decrypted_media(client_id, 2, out_path)
             self.update_gui_log("Client %s: Background blur (processed) -> %s" % (client_id, out_path))
 
             # Send ORIGINAL
-            self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
+            encryptor.send_encrypted_message(client_socket, str(len(buf)))
             client_socket.sendall(buf)
 
             # Send PROCESSED
@@ -648,31 +661,36 @@ class Server:
             if not ok:
                 raise ValueError("imencode failed")
             out_bytes = enc.tobytes()
-            self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+            encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
             client_socket.sendall(out_bytes)
 
         except Exception as e:
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
+            encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-   
-
-    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id):
-        # Notify the client that the server is ready for ROI processing.
-        # The client can send "0" to use a default image or send <N> followed by N bytes for a custom image.
-        self.encryptor.send_encrypted_message(
+    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id, encryptor):
+        """
+        Option 3 (User ROI blur, server-side processing):
+        - Notify client server is ready
+        - Receive either "0" (default image) or <N> + N bytes
+        - Save ORIGINAL
+        - Send ORIGINAL to client for display
+        - Receive ROI list as JSON
+        - Apply blur on ROIs
+        - Save PROCESSED
+        - Send processed image back
+        """
+        # Notify client
+        encryptor.send_encrypted_message(
             client_socket,
             "[SERVER_READY] ROI server-side: send '0' for default image or <N> then N bytes."
         )
 
-        # Receive the client’s choice (either "0" or an image size)
-        size_str = self.encryptor.receive_encrypted_message(client_socket)
+        size_str = encryptor.receive_encrypted_message(client_socket)
         if size_str == "0":
-            # Use one of the server’s default test images
             buf = self._load_server_default_image_bytes()
         else:
-            # Receive the exact number of bytes specified by the client
             image_size = int(size_str)
-            self.encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
+            encryptor.send_encrypted_message(client_socket, "[INFO] Send the image...")
             buf, remaining = b"", image_size
             while remaining > 0:
                 chunk = client_socket.recv(min(4096, remaining))
@@ -681,43 +699,44 @@ class Server:
                 buf += chunk
                 remaining -= len(chunk)
 
-        # Save the ORIGINAL image (for audit/history)
+        # Save ORIGINAL
         orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
-                                            prefix=f"{client_id}_roi_original")
-        self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
+                                              prefix=f"{client_id}_roi_original")
+        with self.db_lock:
+            self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
 
-        # Send the ORIGINAL image back to the client for display and ROI selection
-        self.encryptor.send_encrypted_message(client_socket, str(len(buf)))
+        # Send ORIGINAL back to client
+        encryptor.send_encrypted_message(client_socket, str(len(buf)))
         client_socket.sendall(buf)
 
-        # === Receive the ROI list from the client as JSON ===
-        cmd = self.encryptor.receive_encrypted_message(client_socket)  # Expecting "[C_RECTS]"
+        # Receive ROI command
+        cmd = encryptor.receive_encrypted_message(client_socket)  # Expecting "[C_RECTS]"
         if cmd != "[C_RECTS]":
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] Expected [C_RECTS]")
+            encryptor.send_encrypted_message(client_socket, "[ERROR] Expected [C_RECTS]")
             return
 
-        # Parse the ROI list
-        rects_json = self.encryptor.receive_encrypted_message(client_socket)
+        # Receive ROI list JSON
+        rects_json = encryptor.receive_encrypted_message(client_socket)
         try:
             rects = json.loads(rects_json)  # Format: [[x, y, w, h], ...]
             assert isinstance(rects, list)
         except Exception as e:
-            self.encryptor.send_encrypted_message(client_socket, f"[ERROR] Bad ROI JSON: {e}")
+            encryptor.send_encrypted_message(client_socket, "[ERROR] Bad ROI JSON: %s" % str(e))
             return
 
-        # === Image processing: apply blur to ROI regions on the server ===
+        # Decode image
         arr = np.frombuffer(buf, dtype=np.uint8)
         bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if bgr is None:
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] Decode ORIGINAL failed")
+            encryptor.send_encrypted_message(client_socket, "[ERROR] Decode ORIGINAL failed")
             return
 
+        # Apply blur on ROIs
         out = bgr.copy()
         for r in rects:
             if not (isinstance(r, (list, tuple)) and len(r) == 4):
                 continue
             x, y, w, h = map(int, r)
-            # Clamp ROI coordinates within image bounds
             x = max(0, min(x, out.shape[1] - 1))
             y = max(0, min(y, out.shape[0] - 1))
             w = max(0, min(w, out.shape[1] - x))
@@ -725,38 +744,39 @@ class Server:
             if w <= 0 or h <= 0:
                 continue
 
-            # Choose a Gaussian blur kernel size proportional to ROI size (odd number >= 21)
             k = max(21, 2 * (min(w, h) // 3) + 1)
             patch = out[y:y + h, x:x + w]
             patch_blur = cv2.GaussianBlur(patch, (k, k), 0)
             out[y:y + h, x:x + w] = patch_blur
 
-        # Save the PROCESSED image (for history/logs)
+        # Save PROCESSED
         out_path = self.save_bgr_image(out, base_dir="processed",
-                                    prefix=f"{client_id}_roi_processed")
-        self.db_manager.insert_decrypted_media(client_id, 3, out_path)
+                                       prefix=f"{client_id}_roi_processed")
+        with self.db_lock:
+            self.db_manager.insert_decrypted_media(client_id, 3, out_path)
 
-        # Send the processed image back to the client
+        # Send processed image back
         ok, enc = cv2.imencode(".jpg", out)
         if not ok:
-            self.encryptor.send_encrypted_message(client_socket, "[ERROR] imencode failed")
+            encryptor.send_encrypted_message(client_socket, "[ERROR] imencode failed")
             return
         out_bytes = enc.tobytes()
-        self.encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
+        encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
         client_socket.sendall(out_bytes)
 
-    def handle_logout(self, client_socket, client_id):
+    def handle_logout(self, client_socket, client_id, encryptor):
         """
         Acknowledge logout, update last_seen, and close the socket gracefully.
         """
         try:
             self.update_gui_log("Client %s requested logout" % client_id)
             try:
-                self.db_manager.update_row("clients", "client_id", client_id,
-                                           ["last_seen"], [datetime.datetime.now()])
+                with self.db_lock:
+                    self.db_manager.update_row("clients", "client_id", client_id,
+                                               ["last_seen"], [datetime.datetime.now()])
             except Exception:
                 pass
-            self.encryptor.send_encrypted_message(client_socket, "GOODBYE")
+            encryptor.send_encrypted_message(client_socket, "GOODBYE")
         except Exception:
             pass
         finally:
@@ -842,4 +862,4 @@ class Server:
 if __name__ == "__main__":
     server = Server()
     server.create_gui()
-# ======================
+# =======================
