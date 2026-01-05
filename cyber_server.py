@@ -103,13 +103,20 @@ class Server:
     # GUI helpers
     # ======================
     def update_gui_log(self, message):
-        """Append text to GUI log safely (ignore errors if GUI not ready yet)."""
+        """Append text with timestamp and specific formatting."""
         try:
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            formatted_msg = f"[{ts}] {message}\n"
             self.log_text.config(state=tk.NORMAL)
-            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.insert(tk.END, formatted_msg)
+            # צביעת ה-Timestamp בירוק כהה יותר
+            last_line = self.log_text.index("end-2c linestart")
+            self.log_text.tag_add("timestamp", last_line, f"{last_line} + 10 chars")
+            self.log_text.tag_config("timestamp", foreground="#008800")
+            
             self.log_text.config(state=tk.DISABLED)
             self.log_text.yview(tk.END)
-        except Exception:
+        except:
             pass
 
     def update_client_list(self):
@@ -124,41 +131,44 @@ class Server:
             pass
 
     def show_client_details(self, client_id):
-        """Show a popup window with DB info about a specific client."""
+        """Modernized popup for client details."""
+        if not client_id: return
         with self.db_lock:
             data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
-        if not data:
-            return
-
-        w = Toplevel()
-        w.title("Client %s Details" % client_id)
-        w.geometry("400x350")
-
-        bg_path = r"C:\Users\shapi\Downloads\alin\background_img.jpg"
-        if os.path.exists(bg_path):
-            try:
-                bg_image = ImageTk.PhotoImage(Image.open(bg_path))
-                bg_label = Label(w, image=bg_image)
-                bg_label.image = bg_image
-                bg_label.place(relwidth=1, relheight=1)
-            except Exception:
-                pass
-
+        if not data: return
         c = data[0]
-        details = [
-            "ID: %s" % c[0],
-            "IP: %s" % c[1],
-            "Port: %s" % c[2],
-            "Last Seen: %s" % c[3],
-            "Total Actions: %s" % c[5],
-            "Status: %s" % ("Existing" if c[5] > 0 else "New"),
-        ]
-        for d in details:
-            Label(w, text=d, fg='white', bg='black').pack(anchor="w", padx=10, pady=2)
 
-        Button(w, text="History",
-               command=lambda: self.show_client_history(client_id),
-               bg='gray', fg='white').pack(pady=10)
+        w = Toplevel(self.root)
+        w.title(f"Profile: {client_id}")
+        w.geometry("450x500")
+        w.configure(bg="#1e1e1e")
+
+        # Header in popup
+        tk.Label(w, text=f"USER: {client_id}", font=("Consolas", 16, "bold"), 
+                 fg="#00ffcc", bg="#1e1e1e").pack(pady=20)
+
+        info_frame = tk.Frame(w, bg="#252525", padx=20, pady=20, relief=tk.RIDGE, bd=1)
+        info_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=10)
+
+        details = [
+            ("IP Address", c[1]),
+            ("Port", c[2]),
+            ("Last Seen", c[3].strftime("%Y-%m-%d %H:%M") if c[3] else "N/A"),
+            ("Status", "SAFE" if not c[4] else "BANNED"),
+            ("Total Media", c[5])
+        ]
+
+        for label, value in details:
+            row = tk.Frame(info_frame, bg="#252525")
+            row.pack(fill=tk.X, pady=5)
+            tk.Label(row, text=f"{label}:", fg="#888", bg="#252525", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+            tk.Label(row, text=str(value), fg="white", bg="#252525", font=("Consolas", 10)).pack(side=tk.RIGHT)
+
+        btn_history = tk.Button(w, text="VIEW MEDIA HISTORY", 
+                                command=lambda: self.show_client_history(client_id),
+                                bg="#00ffcc", fg="black", font=("Arial", 10, "bold"), 
+                                padx=20, relief=tk.FLAT)
+        btn_history.pack(pady=20)
 
     def show_client_history(self, client_id):
         """Show another popup with all saved images (paths) for that client."""
@@ -811,52 +821,67 @@ class Server:
             self.update_gui_log("[FATAL] %s" % str(e))
 
     def create_gui(self):
-        """
-        Build the Tkinter GUI and run it. The server loop runs on a background thread.
-        """
-        try:
-            self.play_audio()
-        except Exception:
-            pass
+            """Build a modern, Dark-themed Cyber Control Center GUI."""
+            self.root.deiconify()
+            self.root.title("VeilGuard | Secure Server Control Center")
+            self.root.geometry("1100x700")
+            self.root.configure(bg="#121212")  # Dark Background
 
-        try:
+            # Font Styles
+            title_font = ("Segoe UI", 20, "bold")
+            header_font = ("Consolas", 14, "bold")
+            log_font = ("Consolas", 10)
+
+            # --- Top Header ---
+            header_frame = tk.Frame(self.root, bg="#1f1f1f", height=80, relief=tk.RAISED, bd=2)
+            header_frame.pack(side=tk.TOP, fill=tk.X)
+            
+            title_label = tk.Label(header_frame, text="🛡️ VEILGUARD SERVER MONITOR", 
+                                fg="#00ffcc", bg="#1f1f1f", font=title_font)
+            title_label.pack(pady=15)
+
+            # --- Main Layout Frames ---
+            main_container = tk.Frame(self.root, bg="#121212")
+            main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+            # Left Column: Client List
+            left_frame = tk.Frame(main_container, bg="#121212", width=300)
+            left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 20))
+
+            tk.Label(left_frame, text="ACTIVE CLIENTS", fg="#00ffcc", bg="#121212", font=header_font).pack(anchor="w")
+            
+            self.client_listbox = tk.Listbox(left_frame, bg="#1e1e1e", fg="#ffffff", 
+                                            font=("Consolas", 11), borderwidth=0, 
+                                            highlightthickness=1, highlightbackground="#333",
+                                            selectbackground="#00ffcc", selectforeground="#000")
+            self.client_listbox.pack(fill=tk.BOTH, expand=True, pady=10)
+            self.client_listbox.bind("<Double-Button-1>", lambda e: self.show_client_details(self.client_listbox.get(tk.ACTIVE)))
+
+            btn_refresh = tk.Button(left_frame, text="REFRESH DB", command=self.update_client_list,
+                                    bg="#333", fg="white", font=("Arial", 9, "bold"), 
+                                    relief=tk.FLAT, activebackground="#00ffcc")
+            btn_refresh.pack(fill=tk.X, pady=5)
+
+            # Right Column: Live Logs
+            right_frame = tk.Frame(main_container, bg="#121212")
+            right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+            tk.Label(right_frame, text="LIVE SERVER LOGS", fg="#00ffcc", bg="#121212", font=header_font).pack(anchor="w")
+
+            self.log_text = scrolledtext.ScrolledText(right_frame, bg="#000000", fg="#00ff00", 
+                                                    font=log_font, insertbackground="white",
+                                                    borderwidth=0, highlightthickness=1, 
+                                                    highlightbackground="#333")
+            self.log_text.pack(fill=tk.BOTH, expand=True, pady=10)
+
+            # Start background tasks
             try:
-                self.root.destroy()
-            except Exception:
-                pass
-            self.root = tk.Tk()
-            self.root.title("VeilGuard Server GUI")
-            self.root.geometry("500x500")
-
-            bg_path = r"C:\Users\shapi\Downloads\alin\background_img.jpg"
-            if os.path.exists(bg_path):
-                try:
-                    self.bg_image = ImageTk.PhotoImage(Image.open(bg_path))
-                    bg_label = Label(self.root, image=self.bg_image)
-                    bg_label.place(relwidth=1, relheight=1)
-                except Exception:
-                    pass
-
-            self.log_text = scrolledtext.ScrolledText(
-                self.root, state=tk.DISABLED, wrap=tk.WORD, height=10, bg='black', fg='white'
-            )
-            self.log_text.pack(expand=True, fill='both', padx=10, pady=5)
-
-            Label(self.root, text="VeilGuard Customers",
-                  font=("Arial", 14, "bold"), fg="white", bg="black").pack(pady=5)
-
-            self.client_listbox = Listbox(self.root, bg='black', fg='white')
-            self.client_listbox.pack(expand=True, fill='both', padx=10, pady=5)
-            self.client_listbox.bind(
-                "<Double-Button-1>",
-                lambda e: self.show_client_details(self.client_listbox.get(self.client_listbox.curselection()))
-            )
-
+                self.play_audio()
+            except: pass
+            
             threading.Thread(target=self.start_server, daemon=True).start()
+            self.update_client_list()
             self.root.mainloop()
-
-        except Exception as e:
-            self.update_gui_log("[FATAL] %s" % str(e))
 
 
 if __name__ == "__main__":
