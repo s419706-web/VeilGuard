@@ -31,7 +31,7 @@ import socket
 import threading
 import tkinter as tk
 from tkinter import Label, scrolledtext, Toplevel, Listbox, Button
-from constants import IP, PORT
+from constants import *
 from db_manager import DatabaseManager
 from create_tables import create_all_tables, populate_media_types
 import datetime
@@ -54,6 +54,10 @@ class Server:
         """
         # --- Database
         self.db_manager = DatabaseManager("localhost", "root", "davids74", "mysql")
+        #  Manager for active connections
+        self.active_connections = [] # רשימה של טאפלים (socket, ip)
+        self.conn_lock = threading.Lock()
+        
         create_all_tables(self.db_manager)
         try:
             populate_media_types(self.db_manager)
@@ -89,8 +93,9 @@ class Server:
         """
         try:
             pygame.mixer.init()
-            intro = r"C:\Users\shapi\Downloads\alin\cool_intro.mp3"
-            loop  = r"C:\Users\shapi\Downloads\alin\game-of-thrones-song.mp3"
+            here = os.path.dirname(os.path.abspath(__file__))
+            intro = os.path.join(here, "cool_intro.mp3")
+            loop  = os.path.join(here, "game-of-thrones-song.mp3")
             if not (os.path.exists(intro) and os.path.exists(loop)):
                 return
             pygame.mixer.music.load(intro)
@@ -175,8 +180,8 @@ class Server:
         w = Toplevel()
         w.title("Client %s - History" % client_id)
         w.geometry("600x400")
-
-        bg_path = r"C:\Users\shapi\Downloads\alin\background_img.jpg"
+        here = os.path.dirname(os.path.abspath(__file__))
+        bg_path = os.path.join(here, "background_img.jpg")
         if os.path.exists(bg_path):
             try:
                 bg_image = ImageTk.PhotoImage(Image.open(bg_path))
@@ -460,6 +465,12 @@ class Server:
         try:
             # --- Authentication
             username = encryptor.receive_encrypted_message(client_socket)
+            # check ddos status
+            with self.db_lock:
+                user_data = self.db_manager.get_rows_with_value("clients", "client_id", username)
+                if user_data and user_data[0][4]: # ddos_status
+                    encryptor.send_encrypted_message(client_socket, "ACCESS DENIED: ACCOUNT BANNED.")
+                    return  #close connection
             password = encryptor.receive_encrypted_message(client_socket)
             hashed_password = get_hash_value(password)
 
@@ -542,13 +553,11 @@ class Server:
         except Exception as e:
             self.update_gui_log("Connection error with %s: %s" % (client_id, str(e)))
         finally:
-            try:
-                client_socket.close()
-                self.update_gui_log("Connection with %s closed" % client_id)
-            except Exception as e:
-                self.update_gui_log("Error closing socket for %s: %s" % (client_id, str(e)))
-            finally:
-                self.update_client_list()
+                # Remove from active connections
+            with self.conn_lock:
+                self.active_connections = [c for c in self.active_connections if c[0] != client_socket]
+            client_socket.close()
+            self.update_gui_log(f"Connection closed for {client_ip}")
 
     # ======================
     # Command handlers (1/2/3/4)
@@ -804,21 +813,57 @@ class Server:
     # Server control
     # ======================
     def start_server(self):
-        """
-        Main accept loop. Spawns a new daemon thread per client.
-        """
-        try:
-            server_socket = socket.socket()
-            server_socket.bind((IP, PORT))
-            server_socket.listen()
-            self.update_gui_log("Server started on %s:%s" % (IP, PORT))
-            while True:
-                client_socket, _ = server_socket.accept()
-                threading.Thread(target=self.handle_client,
-                                 args=(client_socket,),
-                                 daemon=True).start()
-        except Exception as e:
-            self.update_gui_log("[FATAL] %s" % str(e))
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind((IP, PORT))
+        server_socket.listen(5)
+        self.update_gui_log("Server started on %s:%s" % (IP, PORT))
+
+        while True:
+            client_socket, addr = server_socket.accept()
+            client_ip = addr[0]
+
+            # 1. בדיקה האם ה-IP חסום בגלל DDoS במסד הנתונים
+            with self.db_lock:
+                existing_clients = self.db_manager.get_rows_with_value("clients", "client_ip", client_ip)
+                if existing_clients and any(c[4] for c in existing_clients): # אינדקס 4 הוא ddos_status
+                    self.update_gui_log(f"Blocked connection attempt from banned IP: {client_ip}")
+                    client_socket.close()
+                    continue
+
+            with self.conn_lock:
+                # 2. בדיקת כמות חיבורים מקסימלית בשרת
+                if len(self.active_connections) >= MAX_TOTAL_CONNECTIONS:
+                    self.update_gui_log(f"Max total connections reached. Rejecting {client_ip}")
+                    client_socket.close()
+                    continue
+
+                # 3. בדיקת כמות חיבורים מאותו IP
+                same_ip_conns = [c for c in self.active_connections if c[1] == client_ip]
+                if len(same_ip_conns) >= MAX_CONNECTIONS_PER_IP:
+                    self.update_gui_log(f"DDoS DETECTED from {client_ip}! Blocking IP and disconnecting all.")
+                    
+                    # ניתוק החיבור הנוכחי
+                    client_socket.close()
+                    
+                    # ניתוק וסגירה של כל שאר החיבורים מאותו IP
+                    for sock, ip in same_ip_conns:
+                        try:
+                            sock.close()
+                        except:
+                            pass
+                    
+                    # הסרה מהרשימה הפעילה
+                    self.active_connections = [c for c in self.active_connections if c[1] != client_ip]
+                    
+                    # עדכון מסד הנתונים - סימון ddos_status כ-True לכל המשתמשים ששימשו ב-IP זה
+                    with self.db_lock:
+                        for c_row in existing_clients:
+                            self.db_manager.update_row("clients", "client_id", c_row[0], ["ddos_status"], [True])
+                    continue
+
+                # אם הכל תקין - הוספה לרשימת החיבורים והפעלת הטיפול בלקוח
+                self.active_connections.append((client_socket, client_ip))
+                threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start()
 
     def create_gui(self):
             """Build a modern, Dark-themed Cyber Control Center GUI."""
