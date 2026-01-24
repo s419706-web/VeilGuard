@@ -79,47 +79,72 @@ class Client:
     # NETWORK
     # ======================
     def connect_to_server(self):
-        """Create a TCP socket and connect to the server defined in constants.py."""
         try:
             self.client_socket = socket.socket()
             self.client_socket.connect((IP, PORT))
-            print("Connected to server at {}:{}".format(IP, PORT))
-        except Exception as e:
-            print("Connection failed: {}".format(e))
+        except Exception:
             self.client_socket = None
 
     # ======================
     # SPLASH
     # ======================
-    def show_splash(self):
-        """
-        Show a 400x400 splash image for ~4 seconds, then close and continue.
-        This runs in its own short Tk mainloop before the main UI.
-        """
-        root = tk.Tk()
-        root.withdraw()  # Hide the main root
-
+    def show_splash(self, root):
         splash = Toplevel(root)
-        splash.geometry("400x400")
         splash.overrideredirect(True)
+        splash.configure(bg="black")
 
-        # Update path to your splash image if needed
-        img_path = r"C:\Users\shapi\Downloads\intro_img.png"
-        try:
-            logo = Image.open(img_path).resize((400, 400))
-            logo_photo = ImageTk.PhotoImage(logo)
-            label = Label(splash, image=logo_photo)
-            label.image = logo_photo
-            label.pack()
-        except Exception:
-            Label(splash, text="VeilGuard", font=("Segoe UI", 28)).pack(expand=True)
+        w, h = 900, 500
+        x = (splash.winfo_screenwidth() - w) // 2
+        y = (splash.winfo_screenheight() - h) // 2
+        splash.geometry(f"{w}x{h}+{x}+{y}")
 
-        def close_splash():
-            splash.destroy()
-            root.destroy()
+        label = tk.Label(splash, bg="black")
+        label.pack(fill="both", expand=True)
 
-        splash.after(4000, close_splash)
-        root.mainloop()
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        video_path = os.path.join(base_dir, "intro_video.mp4")
+
+        # fallback: אין וידאו -> סגור אחרי 1200ms
+        if not os.path.exists(video_path):
+            tk.Label(splash, text="VeilGuard", fg="white", bg="black",
+                    font=("Segoe UI", 28, "bold")).place(relx=0.5, rely=0.5, anchor="center")
+            root.after(1200, splash.destroy)
+            return splash
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            tk.Label(splash, text="VeilGuard", fg="white", bg="black",
+                    font=("Segoe UI", 28, "bold")).place(relx=0.5, rely=0.5, anchor="center")
+            root.after(1200, splash.destroy)
+            return splash
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps < 5:
+            fps = 30
+        delay = int(1000 / fps)
+
+        def tick():
+            if not splash.winfo_exists():
+                cap.release()
+                return
+
+            ok, frame = cap.read()
+            if not ok:
+                cap.release()
+                splash.destroy()
+                return
+
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, (w, h))
+            img = ImageTk.PhotoImage(Image.fromarray(frame))
+            label.configure(image=img)
+            label.image = img
+            root.after(delay, tick)
+
+        tick()
+        return splash
+
+
 
     # ======================
     # STYLE / UI HELPERS
@@ -271,27 +296,28 @@ class Client:
             self.ui_root.after(0, _set)
 
     def ui_enable_controls(self, enable):
-        """
-        Enable/disable the main action buttons while an operation runs.
-        Also start/stop the spinner so the user knows something is happening.
-        """
-        state = tk.NORMAL if enable else tk.DISABLED
-        for b in self.btns.values():
-            try:
-                b.config(state=state)
-            except Exception:
-                pass
-        if enable:
-            self.spinner_stop()
-        else:
-            self.spinner_start()
+        def _apply():
+            state = tk.NORMAL if enable else tk.DISABLED
+            for b in self.btns.values():
+                try:
+                    b.config(state=state)
+                except Exception:
+                    pass
+            if enable:
+                self.spinner_stop()
+            else:
+                self.spinner_start()
+
+        if self.ui_root:
+            self.ui_root.after(0, _apply)
+
 
     # ======================
     # UI BUILD
     # ======================
-    def build_ui(self):
+    def build_ui(self, root):
         """Create the main window, top action bar, previews, and status bar."""
-        self.ui_root = tk.Tk()
+        self.ui_root = root
         self.ui_root.title("VeilGuard Client")
         self.ui_root.geometry("1000x660")
         self.ui_root.minsize(900, 560)
@@ -301,6 +327,7 @@ class Client:
         # Header
         header = ttk.Frame(self.ui_root, style="TopBar.TFrame")
         header.pack(side=tk.TOP, fill=tk.X)
+        self.ui_root.update_idletasks()
         self.draw_gradient_header(header, width=self.ui_root.winfo_width(), height=92)
 
         # Action bar
@@ -373,7 +400,7 @@ class Client:
 
         # Window close
         self.ui_root.protocol("WM_DELETE_WINDOW", self.ui_root.destroy)
-        self.ui_root.mainloop()
+        
 
     # ======================
     # UI UTILITIES
@@ -487,62 +514,136 @@ class Client:
     # ======================
     # LOGIN / MENU
     # ======================
-    def send_credentials(self):
+    def upgraded_login_dialog(self, parent, remember_path="creds.txt"):
         """
-        Send username/password to the server.
-        - If creds.txt exists -> read and use it.
-        - Else -> open a small login window, then save to creds.txt.
-        - If server says "PASSWORD INCORRECT" -> close and exit.
+        Modal login dialog (Toplevel). Returns (username, password) or (None, None).
         """
-        creds_file = "creds.txt"
-
-        if os.path.exists(creds_file):
-            with open(creds_file, "r") as f:
-                lines = f.read().strip().split("\n")
-                client_id = lines[0]
-                password = lines[1]
-        else:
-            # Tiny login window
-            root = tk.Tk()
-            root.title("Login")
-
-            tk.Label(root, text="Username:").grid(row=0, column=0, padx=5, pady=5)
-            tk.Label(root, text="Password:").grid(row=1, column=0, padx=5, pady=5)
-
-            username_entry = tk.Entry(root)
-            password_entry = tk.Entry(root, show="*")
-            username_entry.grid(row=0, column=1, padx=5, pady=5)
-            password_entry.grid(row=1, column=1, padx=5, pady=5)
-
-            creds = {}
-
-            def submit():
-                creds["username"] = username_entry.get()
-                creds["password"] = password_entry.get()
-                root.destroy()
-
-            tk.Button(root, text="Login", command=submit).grid(row=2, column=0, columnspan=2, pady=10)
-            root.mainloop()
-
-            client_id = creds.get("username", "")
-            password = creds.get("password", "")
-
-            with open(creds_file, "w") as f:
-                f.write(client_id + "\n" + password)
-
-        # Send encrypted
-        self.encryptor.send_encrypted_message(self.client_socket, client_id)
-        self.encryptor.send_encrypted_message(self.client_socket, password)
-
-        # Read server response
-        response = self.encryptor.receive_encrypted_message(self.client_socket)
-        print(response)
-        if "PASSWORD INCORRECT" in response:
+        win = tk.Toplevel(parent)
+        win.title("VeilGuard Login")
+        win.geometry("420x260")
+        win.resizable(False, False)
+        win.configure(bg="#111318")
+        win.transient(parent)
+        win.grab_set()
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(200, lambda: win.attributes("-topmost", False))
+        # ---- Load remembered username ----
+        saved_user = ""
+        if os.path.exists(remember_path):
             try:
-                self.client_socket.close()
+                with open(remember_path, "r", encoding="utf-8") as f:
+                    saved_user = f.readline().strip()
             except Exception:
                 pass
-            raise SystemExit()
+
+        frame = tk.Frame(win, bg="#111318")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        tk.Label(frame, text="VeilGuard", font=("Segoe UI", 18, "bold"),
+                bg="#111318", fg="white").pack(anchor="w", pady=(0, 12))
+
+        tk.Label(frame, text="Username", bg="#111318", fg="white").pack(anchor="w")
+        user_var = tk.StringVar(value=saved_user)
+        user_entry = tk.Entry(frame, textvariable=user_var, font=("Segoe UI", 11))
+        user_entry.pack(fill="x", pady=(4, 10))
+
+        tk.Label(frame, text="Password", bg="#111318", fg="white").pack(anchor="w")
+        pass_var = tk.StringVar()
+        pass_entry = tk.Entry(frame, textvariable=pass_var, show="*", font=("Segoe UI", 11))
+        pass_entry.pack(fill="x", pady=(4, 6))
+
+        show_var = tk.BooleanVar()
+        def toggle_show():
+            pass_entry.config(show="" if show_var.get() else "*")
+
+        tk.Checkbutton(
+            frame, text="Show password", variable=show_var,
+            command=toggle_show, bg="#111318", fg="white",
+            activebackground="#111318", selectcolor="#111318"
+        ).pack(anchor="w")
+
+        err_label = tk.Label(frame, text="", fg="#ff6b6b", bg="#111318")
+        err_label.pack(anchor="w", pady=(6, 0))
+
+        result = {"u": None, "p": None}
+
+        def submit():
+            u = user_var.get().strip()
+            p = pass_var.get()
+            if not u:
+                err_label.config(text="Username is required.")
+                return
+            if not p:
+                err_label.config(text="Password is required.")
+                return
+            result["u"] = u
+            result["p"] = p
+            win.destroy()
+
+        def cancel():
+            win.destroy()
+
+        btns = tk.Frame(frame, bg="#111318")
+        btns.pack(fill="x", pady=(14, 0))
+
+        tk.Button(btns, text="Login", command=submit, width=10).pack(side="right")
+        tk.Button(btns, text="Cancel", command=cancel, width=10).pack(side="right", padx=6)
+
+        user_entry.focus_set()
+        win.bind("<Return>", lambda e: submit())
+        win.bind("<Escape>", lambda e: cancel())
+
+        parent.wait_window(win)
+        return result["u"], result["p"]
+    
+    def send_credentials(self, parent):
+        creds_file = "creds.txt"
+
+        client_id = ""
+        password = ""
+
+        if os.path.exists(creds_file):
+            try:
+                with open(creds_file, "r", encoding="utf-8") as f:
+                    lines = f.read().splitlines()
+                if len(lines) >= 2:
+                    client_id = lines[0].strip()
+                    password = lines[1].strip()
+            except Exception:
+                pass
+
+        if not client_id or not password:
+            client_id, password = self.upgraded_login_dialog(parent, creds_file)
+            if not client_id:
+                return False
+            try:
+                with open(creds_file, "w", encoding="utf-8") as f:
+                    f.write(client_id + "\n" + password)
+            except Exception:
+                pass
+
+        try:
+            self.encryptor.send_encrypted_message(self.client_socket, client_id)
+            self.encryptor.send_encrypted_message(self.client_socket, password)
+            response = self.encryptor.receive_encrypted_message(self.client_socket)
+        except Exception:
+            return False
+
+        if not response:
+            return False
+
+        if "PASSWORD INCORRECT" in response:
+            try:
+                if os.path.exists(creds_file):
+                    os.remove(creds_file)
+            except Exception:
+                pass
+            return False
+
+        return True
+
+
 
     def receive_menu(self):
         """
@@ -765,32 +866,62 @@ class Client:
     # MAIN FLOW
     # ======================
     def run(self):
-        """
-        Main execution:
-        - Connect
-        - Splash
-        - Login (creds popup if needed)
-        - Pull menu once to sync
-        - Build and run the main UI
-        """
         try:
             self.connect_to_server()
             if not self.client_socket:
                 return
-            self.show_splash()
-            self.send_credentials()
-            self.receive_menu()   # initial sync
-            self.build_ui()
-        except KeyboardInterrupt:
-            print("\nClient shutting down...")
+
+            # ROOT יחיד לכל התוכנית
+            root = tk.Tk()
+            root.withdraw()  # מסתירים עד שמסיימים ספלאש+לוגין
+
+            # ספלאש וידאו (על אותו root)
+            splash = self.show_splash(root)
+
+            # כשהספלאש נסגר -> עושים login -> ואז פותחים UI
+            def after_splash():
+                # אם הספלאש כבר נהרס, לפעמים winfo_exists זורק TclError
+                try:
+                    alive = splash.winfo_exists()
+                except tk.TclError:
+                    alive = 0
+
+                if alive:
+                    root.after(100, after_splash)
+                    return
+                root.deiconify()
+                root.lift()
+                root.attributes("-topmost", True)
+                root.after(200, lambda: root.attributes("-topmost", False))
+                # עכשיו ממשיכים ללוגין
+                ok = self.send_credentials(root)
+                if not ok:
+                    try:
+                        if self.client_socket:
+                            self.client_socket.close()
+                    except Exception:
+                        pass
+                    root.destroy()
+                    return
+
+                self.receive_menu()
+
+                root.deiconify()
+                self.build_ui(root)
+
+
+            after_splash()
+            root.mainloop()
+
         except Exception as e:
-            print("Fatal error: {}".format(e))
+            print("Fatal error:", e)
         finally:
             if self.client_socket:
                 try:
                     self.client_socket.close()
                 except Exception:
                     pass
+
 
 
 # ======================
