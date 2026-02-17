@@ -171,55 +171,54 @@ class DatabaseManager:
     
     def get_rows_with_value(self, table_name, column_name, column_value):
         """
-        Get rows from a table where a column matches a value
-        
-        Args:
-            table_name: Name of the target table
-            column_name: Column to filter on
-            column_value: Value to match
-            
-        Returns:
-            List of matching rows
+        Get rows from a table where a column matches a value.
+
+        Notes:
+        - Uses parameterized queries to avoid SQL injection.
+        - table_name / column_name are assumed to come from trusted code (not user input).
         """
         if not self.database:
             raise ValueError("No database selected.")
-            
+
         tables = self.show_tables()
-        if table_name in tables:
-            cursor = self.conn.cursor()
-            query = f"SELECT * FROM {table_name} WHERE {column_name} = '{column_value}'"
-            cursor.execute(query)
-            return cursor.fetchall()
-        else:
+        if table_name not in tables:
             print(f"Table {table_name} does not exist.")
             return []
-    
+
+        cursor = self.conn.cursor()
+        query = f"SELECT * FROM {table_name} WHERE {column_name} = %s"
+        cursor.execute(query, (column_value,))
+        return cursor.fetchall()
+
+
     def update_row(self, table_name, primary_key_column, primary_key_value, column_names, column_values):
         """
-        Update a row in a table
-        
-        Args:
-            table_name: Name of the target table
-            primary_key_column: Primary key column name
-            primary_key_value: Primary key value to match
-            column_names: List of column names to update
-            column_values: List of new values
+        Update a row in a table.
+
+        Notes:
+        - Values are parameterized (%s) to avoid SQL injection.
+        - column_names / table_name are assumed to come from trusted code (not user input).
         """
         if not self.database:
             raise ValueError("No database selected.")
-            
+
+        if len(column_names) != len(column_values):
+            raise ValueError("column_names and column_values must have the same length.")
+
         tables = self.show_tables()
-        if table_name in tables:
-            cursor = self.conn.cursor()
-            set_clause = ", ".join(f"{col} = %s" for col in column_names)
-            query = f"UPDATE {table_name} SET {set_clause} WHERE {primary_key_column} = %s"
-            values = column_values + [primary_key_value]
-            cursor.execute(query, values)
-            self.conn.commit()
-            print(f"Row in table {table_name} updated successfully.")
-        else:
+        if table_name not in tables:
             print(f"Table {table_name} does not exist.")
-    
+            return
+
+        cursor = self.conn.cursor()
+        set_clause = ", ".join(f"{col} = %s" for col in column_names)
+        query = f"UPDATE {table_name} SET {set_clause} WHERE {primary_key_column} = %s"
+        values = list(column_values) + [primary_key_value]
+        cursor.execute(query, values)
+        self.conn.commit()
+        print(f"Row in table {table_name} updated successfully.")
+
+        
     def insert_decrypted_media(self, user_id, media_type_id, path):
         """
         Insert a record into the `decrypted_media` table.

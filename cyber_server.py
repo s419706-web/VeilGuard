@@ -4,7 +4,7 @@
 # Features:
 # 1) Blur Faces (MediaPipe FaceDetection, CPU)
 # 2) Blur Background (MediaPipe SelfieSegmentation, CPU)
-# 3) User ROI Blur (client-side; server stores original+final)
+# 3) User ROI Blur (client selects ROIs; server blurs + stores original+processed)
 # 4) Logout
 #
 # Protocol notes for options 1 & 2:
@@ -689,14 +689,19 @@ class Server:
     def handle_option_3_user_selected_blur_receive(self, client_socket, client_id, encryptor):
         """
         Option 3 (User ROI blur, server-side processing):
-        - Notify client server is ready
-        - Receive either "0" (default image) or <N> + N bytes
-        - Save ORIGINAL
-        - Send ORIGINAL to client for display
-        - Receive ROI list as JSON
-        - Apply blur on ROIs
-        - Save PROCESSED
-        - Send processed image back
+        Server sends [SERVER_READY]
+
+        Client sends "0" (default) or <N> + <N bytes> (client image)
+
+        Server saves ORIGINAL
+
+        Server sends ORIGINAL bytes to client (for ROI selection)
+
+        Client sends [C_RECTS] ואז JSON של [[x,y,w,h], ...]
+
+        Server applies blur on ROIs, saves PROCESSED
+
+        Server sends PROCESSED bytes back to client
         """
         # Notify client
         encryptor.send_encrypted_message(
