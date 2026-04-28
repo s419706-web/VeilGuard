@@ -3,7 +3,8 @@ from db_manager import DatabaseManager
 def create_all_tables(db_manager: DatabaseManager):
     """
     Create all necessary tables (clients, media_types, decrypted_media).
-    Fully aligned with the final SQL schema for VeilGuard.
+    Updated schema to use INT user_id and hashed username for enhanced security
+    and SQL Injection prevention.
     """
 
     # ============================
@@ -12,7 +13,8 @@ def create_all_tables(db_manager: DatabaseManager):
     db_manager.create_table(
         "clients",
         "("
-        " client_id VARCHAR(255) NOT NULL PRIMARY KEY,"
+        " user_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+        " username_hash VARCHAR(255) NOT NULL UNIQUE,"
         " client_ip VARCHAR(255) NOT NULL,"
         " client_port INT NOT NULL,"
         " last_seen DATETIME NOT NULL,"
@@ -41,7 +43,7 @@ def create_all_tables(db_manager: DatabaseManager):
         "decrypted_media",
         "("
         " id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,"
-        " user_id VARCHAR(255) NOT NULL,"
+        " user_id INT NOT NULL,"
         " media_type_id INT NOT NULL,"
         " path_to_decrypted_media TEXT NOT NULL,"
         " created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
@@ -50,7 +52,7 @@ def create_all_tables(db_manager: DatabaseManager):
         " INDEX idx_media_type (media_type_id),"
 
         " CONSTRAINT fk_decrypted_media_user FOREIGN KEY (user_id)"
-        "     REFERENCES clients(client_id)"
+        "     REFERENCES clients(user_id)"
         "     ON DELETE CASCADE ON UPDATE CASCADE,"
 
         " CONSTRAINT fk_decrypted_media_type FOREIGN KEY (media_type_id)"

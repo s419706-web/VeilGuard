@@ -24,7 +24,7 @@ Key ideas:
 # ======================
 import json
 import tkinter as tk
-from tkinter import Toplevel, Label, filedialog, ttk
+from tkinter import Toplevel, Label, filedialog, ttk, messagebox
 import socket
 import os
 import time
@@ -189,6 +189,7 @@ class Client:
         style.map("Action.TButton",
                   background=[("active", self._panel_hi)],
                   foreground=[("disabled", "#777777")])
+        
 
         # Labels
         style.configure("Status.TLabel", background=self._bg, foreground=self._muted, font=("Segoe UI", 10))
@@ -368,6 +369,19 @@ class Client:
                                          style="Action.TButton",
                                          command=lambda: self.ui_run_async(self.ui_do_logout))
         self.btns["logout"].pack(side=tk.RIGHT, padx=6)
+        # --- Blur Intensity Slider ---
+        slider_frame = tk.Frame(top, bg=self._bg)
+        slider_frame.pack(side=tk.LEFT, padx=20)
+        
+        tk.Label(slider_frame, text="Blur Level:", fg=self._muted, bg=self._bg, 
+                 font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        
+        self.blur_slider = tk.Scale(slider_frame, from_=1, to=10, orient=tk.HORIZONTAL,
+                                   bg=self._bg, fg=self._accent, highlightthickness=0,
+                                   troughcolor=self._panel, activebackground=self._accent,
+                                   font=("Segoe UI", 9), length=150, showvalue=True)
+        self.blur_slider.set(5) # ברירת מחדל
+        self.blur_slider.pack(side=tk.LEFT)
 
         # Tooltips
         Client.Tooltip(self.btns["choose"], "Pick an image from disk")
@@ -375,6 +389,8 @@ class Client:
         Client.Tooltip(self.btns["bg"], "Blur the background; keep people sharp (server-side)")
         Client.Tooltip(self.btns["user"], "Draw rectangles to blur areas; press ESC to finish (client-side)")
         Client.Tooltip(self.btns["logout"], "Close session and exit")
+        
+        
 
         # Main content (two cards)
         mid = ttk.Frame(self.ui_root)
@@ -512,153 +528,214 @@ class Client:
         threading.Thread(target=runner, daemon=True).start()
 
     # ======================
-    # LOGIN / MENU
+    # LOGIN / MENU UI
     # ======================
-    def upgraded_login_dialog(self, parent, remember_path="creds.txt"):
+    def upgraded_login_dialog(self, parent, remember_path="creds.txt", initial_error=""):
         """
-        Modal login dialog (Toplevel). Returns (username, password) or (None, None).
+        Modern Modal dialog for both Login and Register. 
+        Displays errors INSIDE the UI instead of using popups.
         """
-        win = tk.Toplevel(parent)
-        win.title("VeilGuard Login")
-        win.geometry("420x260")
-        win.resizable(False, False)
-        win.configure(bg="#111318")
-        win.transient(parent)
-        win.grab_set()
-        win.lift()
-        win.attributes("-topmost", True)
-        win.after(200, lambda: win.attributes("-topmost", False))
-        # ---- Load remembered username ----
-        saved_user = ""
+        self.login_win = tk.Toplevel(parent)
+        self.login_win.title("VeilGuard Authentication")
+        self.login_win.geometry("420x520") # קצת יותר גדול כדי שיראה מרווח ומודרני
+        self.login_win.resizable(False, False)
+        
+        # --- Modern Color Palette ---
+        BG_COLOR = "#0b0f19"       # רקע כחול-שחור עמוק
+        INPUT_BG = "#1e293b"       # אפור-כחול לתיבות טקסט
+        FG_COLOR = "#ffffff"       # טקסט לבן
+        ACCENT_COLOR = "#7c3aed"   # סגול מודרני לכפתור
+        ACCENT_HOVER = "#6d28d9"   # סגול כהה יותר כשמעבירים עכבר
+        TEXT_MUTED = "#94a3b8"     # טקסט אפור להסברים
+        
+        self.login_win.configure(bg=BG_COLOR)
+        self.login_win.transient(parent)
+        self.login_win.grab_set()
+
+        # ---- State Variables ----
+        self.is_login_mode = False  
+        self.login_result = {"action": None, "u": None, "p": None}
+
+        saved_user, saved_pass = "", ""
         if os.path.exists(remember_path):
             try:
                 with open(remember_path, "r", encoding="utf-8") as f:
-                    saved_user = f.readline().strip()
-            except Exception:
-                pass
+                    lines = f.read().splitlines()
+                    if len(lines) >= 2:
+                        saved_user, saved_pass = lines[0].strip(), lines[1].strip()
+            except Exception: pass
 
-        frame = tk.Frame(win, bg="#111318")
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
+        main_frame = tk.Frame(self.login_win, bg=BG_COLOR)
+        main_frame.pack(fill="both", expand=True, padx=40, pady=35)
+        
+        self.title_var = tk.StringVar(value="Create Account")
+        self.submit_btn_text = tk.StringVar(value="REGISTER")
+        self.toggle_btn_text = tk.StringVar(value="Already have an account? Sign In")
 
-        tk.Label(frame, text="VeilGuard", font=("Segoe UI", 18, "bold"),
-                bg="#111318", fg="white").pack(anchor="w", pady=(0, 12))
+        # Title
+        tk.Label(main_frame, textvariable=self.title_var, font=("Segoe UI", 22, "bold"),
+                 bg=BG_COLOR, fg=FG_COLOR).pack(anchor="center", pady=(0, 20))
 
-        tk.Label(frame, text="Username", bg="#111318", fg="white").pack(anchor="w")
-        user_var = tk.StringVar(value=saved_user)
-        user_entry = tk.Entry(frame, textvariable=user_var, font=("Segoe UI", 11))
-        user_entry.pack(fill="x", pady=(4, 10))
+        # --- Inline Error Message ---
+        self.err_label = tk.Label(main_frame, text=initial_error, fg="#ef4444", bg=BG_COLOR, font=("Segoe UI", 10, "bold"))
+        self.err_label.pack(anchor="center", pady=(0, 15))
 
-        tk.Label(frame, text="Password", bg="#111318", fg="white").pack(anchor="w")
-        pass_var = tk.StringVar()
-        pass_entry = tk.Entry(frame, textvariable=pass_var, show="*", font=("Segoe UI", 11))
-        pass_entry.pack(fill="x", pady=(4, 6))
+        # Username Field
+        tk.Label(main_frame, text="USERNAME", bg=BG_COLOR, fg=TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        u_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=0, highlightthickness=1, highlightbackground="#334155", padx=8, pady=5)
+        u_frame.pack(fill="x", pady=(5, 15))
+        self.user_var = tk.StringVar(value=saved_user)
+        user_entry = tk.Entry(u_frame, textvariable=self.user_var, font=("Segoe UI", 11), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground="white")
+        user_entry.pack(fill="x", ipady=4)
 
-        show_var = tk.BooleanVar()
-        def toggle_show():
-            pass_entry.config(show="" if show_var.get() else "*")
+        # Password Field
+        tk.Label(main_frame, text="PASSWORD", bg=BG_COLOR, fg=TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        p_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=0, highlightthickness=1, highlightbackground="#334155", padx=8, pady=5)
+        p_frame.pack(fill="x", pady=(5, 5))
+        self.pass_var = tk.StringVar(value=saved_pass)
+        pass_entry = tk.Entry(p_frame, textvariable=self.pass_var, show="•", font=("Segoe UI", 11), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground="white")
+        pass_entry.pack(fill="x", ipady=4)
 
-        tk.Checkbutton(
-            frame, text="Show password", variable=show_var,
-            command=toggle_show, bg="#111318", fg="white",
-            activebackground="#111318", selectcolor="#111318"
-        ).pack(anchor="w")
+        # Show Password Checkbox
+        self.show_var = tk.BooleanVar()
+        tk.Checkbutton(main_frame, text="Show password", variable=self.show_var,
+                       command=lambda: pass_entry.config(show="" if self.show_var.get() else "•"),
+                       bg=BG_COLOR, fg=TEXT_MUTED, activebackground=BG_COLOR, activeforeground=FG_COLOR,
+                       selectcolor=BG_COLOR, cursor="hand2", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 25))
 
-        err_label = tk.Label(frame, text="", fg="#ff6b6b", bg="#111318")
-        err_label.pack(anchor="w", pady=(6, 0))
+        # Main Submit Button
+        submit_btn = tk.Button(main_frame, textvariable=self.submit_btn_text, command=self._on_login_submit,
+                               bg=ACCENT_COLOR, fg=FG_COLOR, font=("Segoe UI", 12, "bold"), bd=0,
+                               activebackground=ACCENT_HOVER, activeforeground=FG_COLOR, cursor="hand2", pady=10)
+        submit_btn.pack(fill="x", pady=(5, 15))
+        
+        # Hover effects for button
+        submit_btn.bind("<Enter>", lambda e: submit_btn.config(bg=ACCENT_HOVER))
+        submit_btn.bind("<Leave>", lambda e: submit_btn.config(bg=ACCENT_COLOR))
 
-        result = {"u": None, "p": None}
-
-        def submit():
-            u = user_var.get().strip()
-            p = pass_var.get()
-            if not u:
-                err_label.config(text="Username is required.")
-                return
-            if not p:
-                err_label.config(text="Password is required.")
-                return
-            result["u"] = u
-            result["p"] = p
-            win.destroy()
-
-        def cancel():
-            win.destroy()
-
-        btns = tk.Frame(frame, bg="#111318")
-        btns.pack(fill="x", pady=(14, 0))
-
-        tk.Button(btns, text="Login", command=submit, width=10).pack(side="right")
-        tk.Button(btns, text="Cancel", command=cancel, width=10).pack(side="right", padx=6)
+        # Toggle Button
+        tk.Button(main_frame, textvariable=self.toggle_btn_text, command=self._on_login_toggle,
+                  bg=BG_COLOR, fg="#8b949e", activebackground=BG_COLOR, activeforeground=FG_COLOR,
+                  relief="flat", bd=0, cursor="hand2", font=("Segoe UI", 10)).pack(anchor="center")
 
         user_entry.focus_set()
-        win.bind("<Return>", lambda e: submit())
-        win.bind("<Escape>", lambda e: cancel())
+        self.login_win.bind("<Return>", lambda e: self._on_login_submit())
+        self.login_win.bind("<Escape>", lambda e: self._on_login_cancel())
+        
+        parent.wait_window(self.login_win)
+        return self.login_result
 
-        parent.wait_window(win)
-        return result["u"], result["p"]
-    
-    def send_credentials(self, parent):
-        creds_file = "creds.txt"
+    def _on_login_toggle(self):
+        """Switches UI between Login and Register modes."""
+        self.is_login_mode = not self.is_login_mode
+        self.err_label.config(text="") # Clear errors on toggle
+        
+        if self.is_login_mode:
+            self.title_var.set("Welcome Back")
+            self.submit_btn_text.set("SIGN IN")
+            self.toggle_btn_text.set("Don't have an account? Register here")
+        else:
+            self.title_var.set("Create Account")
+            self.submit_btn_text.set("REGISTER")
+            self.toggle_btn_text.set("Already have an account? Sign In")
 
-        client_id = ""
-        password = ""
+    def _on_login_submit(self):
+        u, p = self.user_var.get().strip(), self.pass_var.get()
+        if not u or not p:
+            self.err_label.config(text="All fields are required.")
+            return
+            
+        self.login_result["action"] = "LOGIN" if self.is_login_mode else "REGISTER"
+        self.login_result["u"] = u
+        self.login_result["p"] = p
+        self.login_win.destroy()
 
-        if os.path.exists(creds_file):
-            try:
-                with open(creds_file, "r", encoding="utf-8") as f:
-                    lines = f.read().splitlines()
-                if len(lines) >= 2:
-                    client_id = lines[0].strip()
-                    password = lines[1].strip()
-            except Exception:
-                pass
+    def _on_login_cancel(self):
+        self.login_win.destroy()
 
-        if not client_id or not password:
-            client_id, password = self.upgraded_login_dialog(parent, creds_file)
-            if not client_id:
+    def send_credentials(self, parent, auto_file=None):
+        """
+        Modified to strictly separate UI and Headless mode for stress automation tests.
+        """
+        creds_file = auto_file if auto_file else "creds.txt"
+        
+        # --- Headless Mode (Stress Test) ---
+        if auto_file:
+            if not os.path.exists(auto_file):
+                print(f"[ERROR] Auto-file {auto_file} missing.")
                 return False
             try:
-                with open(creds_file, "w", encoding="utf-8") as f:
-                    f.write(client_id + "\n" + password)
-            except Exception:
-                pass
-
-        try:
-            self.encryptor.send_encrypted_message(self.client_socket, client_id)
-            self.encryptor.send_encrypted_message(self.client_socket, password)
-            response = self.encryptor.receive_encrypted_message(self.client_socket)
-        except Exception:
+                with open(auto_file, "r", encoding="utf-8") as f:
+                    lines = f.read().splitlines()
+                    if len(lines) >= 2:
+                        u, p = lines[0].strip(), lines[1].strip()
+                        # בטסט אנחנו מניחים LOGIN, אלא אם שם הקובץ מכיל signup
+                        action = "REGISTER" if "signup" in auto_file else "LOGIN"
+                        
+                        self.encryptor.send_encrypted_message(self.client_socket, action)
+                        self.encryptor.send_encrypted_message(self.client_socket, u)
+                        self.encryptor.send_encrypted_message(self.client_socket, p)
+                        resp = self.encryptor.receive_encrypted_message(self.client_socket)
+                        return resp in ["LOGIN_SUCCESS", "REGISTER_SUCCESS"]
+            except Exception as e:
+                print(f"Headless login error: {e}")
+                return False
             return False
 
-        if not response:
+        # --- UI Mode (Regular User) ---
+        if parent is None: # הגנה למקרה שנקרא בטעות בלי אבא
             return False
 
-        if "PASSWORD INCORRECT" in response:
+        from tkinter import messagebox
+        current_error = "" 
+        while True:
+            result = self.upgraded_login_dialog(parent, creds_file, initial_error=current_error)
+            if not result or not result["action"]: return False
+            
+            action, client_id, password = result["action"], result["u"], result["p"]
             try:
-                if os.path.exists(creds_file):
-                    os.remove(creds_file)
-            except Exception:
-                pass
-            return False
-
-        return True
-
-
-
+                self.encryptor.send_encrypted_message(self.client_socket, action)
+                self.encryptor.send_encrypted_message(self.client_socket, client_id)
+                self.encryptor.send_encrypted_message(self.client_socket, password)
+                response = self.encryptor.receive_encrypted_message(self.client_socket)
+                
+                if response in ["LOGIN_SUCCESS", "REGISTER_SUCCESS"]:
+                    with open(creds_file, "w", encoding="utf-8") as f:
+                        f.write(client_id + "\n" + password)
+                    return True
+                
+                current_error = response.replace("ERROR: ", "")
+                self.client_socket.close()
+                self.connect_to_server()
+                self.encryptor = Encryption() 
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=parent)
+                return False
     def receive_menu(self):
         """
-        Read and print the server textual menu. This keeps both sides "in sync"
-        after each operation. Not strictly needed for the UI, but useful.
+        Read and print the server textual menu. 
+        This keeps both sides in sync after authentication.
         """
         try:
             menu = self.encryptor.receive_encrypted_message(self.client_socket)
-            print("\nAvailable operations:")
-            print(menu)
+            # Printing for debug/sync purposes
+            print("\nAvailable operations received from server.")
             return menu
         except Exception as e:
-            print("Menu error: {}".format(e))
+            print("Menu synchronization error: {}".format(e))
             return None
 
+    def ui_do_logout(self):
+        """Modified to delete creds.txt upon manual logout."""
+        try:
+            self.encryptor.send_encrypted_message(self.client_socket, "4")
+            self.encryptor.receive_encrypted_message(self.client_socket)
+        finally:
+            self.logged_out = True
+            if os.path.exists("creds.txt"):
+                os.remove("creds.txt") # Clean for next user
+            self.client_socket.close()
+            self.ui_root.after(500, self.ui_root.destroy)
     # ======================
     # LOW-LEVEL IO HELPERS
     # ======================
@@ -728,6 +805,9 @@ class Client:
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
 
+            # --- הוספה כאן: שליחת עוצמת הטשטוש ---
+            self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
+
             # ORIGINAL first
             orig_size = self.recv_size_or_error()
             orig_bytes = self._recv_exact(orig_size)
@@ -770,6 +850,8 @@ class Client:
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
 
+            # --- הוספה כאן: שליחת עוצמת הטשטוש ---
+            self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
             # ORIGINAL first
             orig_size = self.recv_size_or_error()
             orig_bytes = self._recv_exact(orig_size)
@@ -831,8 +913,11 @@ class Client:
             # 5) שליחת ה-ROI לשרת (כ-JSON)
             self.encryptor.send_encrypted_message(self.client_socket, "[C_RECTS]")
             self.encryptor.send_encrypted_message(self.client_socket, json.dumps(rects))
+            
+            #6) --- הוספה כאן: שליחת עוצמת הטשטוש עבור ה-ROI ---
+            self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
 
-            # 6) קבלת PROCESSED מהשרת והצגה
+            # 7) קבלת PROCESSED מהשרת והצגה
             out_size = self.recv_size_or_error()
             out_bytes = self._recv_exact(out_size)
             proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
@@ -848,6 +933,7 @@ class Client:
         Option 4 (Logout):
         - Send "4" to the server and read its final message.
         - Mark logged_out, close socket, close UI after a short delay.
+        - Delete creds.txt so next login is clean.
         """
         try:
             self.ui_set_status("Logging out...")
@@ -860,8 +946,15 @@ class Client:
                 self.client_socket.close()
             except Exception:
                 pass
+                
+            # --- Delete creds.txt upon manual logout ---
+            try:
+                if os.path.exists("creds.txt"):
+                    os.remove("creds.txt")
+            except Exception:
+                pass
+                
             self.ui_root.after(500, self.ui_root.destroy)
-
     # ======================
     # MAIN FLOW
     # ======================

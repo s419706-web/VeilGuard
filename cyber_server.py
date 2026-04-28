@@ -53,7 +53,7 @@ class Server:
         Initialize database, basic GUI containers, and default server images.
         """
         # --- Database
-        self.db_manager = DatabaseManager("localhost", "root", "davids74", "mysql")
+        self.db_manager = DatabaseManager("localhost", "root", "davids74", "veilguard_db")
         #  Manager for active connections
         self.active_connections = [] # רשימה של טאפלים (socket, ip)
         self.conn_lock = threading.Lock()
@@ -68,9 +68,11 @@ class Server:
         # DB lock for thread-safe access
         self.db_lock = threading.Lock()
 
-        # --- Tkinter GUI basics (created later fully in create_gui)
+        # --- Tkinter GUI basics
         self.root = tk.Tk()
-        self.root.withdraw()
+        # מחביאים את החלון הראשי מיד בהתחלה כדי שלא יקפוץ לפני הסרטון
+        self.root.withdraw() 
+        
         self.log_text = None
         self.client_listbox = None
         self.bg_image = None
@@ -82,6 +84,15 @@ class Server:
             os.path.join(here, "test16.png"),
             os.path.join(here, "test17.png"),
         ]
+
+        # 1. בונים את הממשק הגרפי של השרת (כפתורים, לוגים וכו')
+        # UI בשרת
+        self.create_gui()
+
+        self.show_splash_screen(r"C:\Users\shapi\Downloads\alin\intro_video.mp4")
+
+        # 3. מפעילים את המנוע של Tkinter
+        self.root.mainloop()
 
     # ======================
     # Optional audio (intro -> loop)
@@ -103,6 +114,78 @@ class Server:
             pygame.mixer.music.queue(loop)
         except Exception:
             pass
+    # ======================
+    # Splash Screen (Video)
+    # ======================
+    def show_splash_screen(self, video_path=r"C:\Users\shapi\Downloads\alin\intro_video.mp4"):
+        """ Plays video and then shows main GUI. Ensures GUI shows even if video fails. """
+        try:
+            # 1. בדיקה אם הקובץ בכלל קיים בנתיב שנתנו
+            if not os.path.exists(video_path):
+                print(f"[ERROR] Video file NOT FOUND at: {video_path}")
+                self.end_splash()
+                return
+
+            # 2. יצירת חלון הסרטון
+            self.splash = tk.Toplevel(self.root)
+            self.splash.overrideredirect(True) # ללא גבולות
+            self.splash.attributes("-topmost", True) # תמיד מעל הכל
+            self.splash.configure(bg="black")
+
+            # מרכז את החלון
+            w, h = 800, 600
+            sw, sh = self.splash.winfo_screenwidth(), self.splash.winfo_screenheight()
+            self.splash.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+
+            self.splash_label = tk.Label(self.splash, bg="black")
+            self.splash_label.pack(expand=True, fill="both")
+
+            # 3. ניסיון פתיחת הוידאו
+            self.cap = cv2.VideoCapture(video_path)
+            if not self.cap.isOpened():
+                print("[ERROR] OpenCV failed to open video. Moving to Main UI.")
+                self.end_splash()
+                return
+
+            # הכל תקין - מתחילים לנגן
+            self._play_splash_frame()
+
+        except Exception as e:
+            print(f"[CRITICAL ERROR] Splash failed: {e}")
+            self.end_splash()
+
+    def _play_splash_frame(self):
+        """ Plays frames and handles the end of the video. """
+        try:
+            ret, frame = self.cap.read()
+            if ret:
+                frame = cv2.resize(frame, (800, 600))
+                cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(cv2image)
+                imgtk = ImageTk.PhotoImage(image=img)
+                self.splash_label.imgtk = imgtk
+                self.splash_label.configure(image=imgtk)
+                self.splash.after(20, self._play_splash_frame)
+            else:
+                self.end_splash()
+        except Exception:
+            self.end_splash()
+
+    def end_splash(self):
+        """ Closes splash and forces main window to appear. """
+        print("[DEBUG] Transitioning to Main UI...")
+        try:
+            if hasattr(self, 'cap') and self.cap.isOpened():
+                self.cap.release()
+            if hasattr(self, 'splash'):
+                self.splash.destroy()
+        except:
+            pass
+        
+        # השורה הכי חשובה - מחזירה את המיין סקרין לחיים!
+        self.root.deiconify() 
+        self.root.attributes("-topmost", True)
+        self.root.after(100, lambda: self.root.attributes("-topmost", False))
 
     # ======================
     # GUI helpers
@@ -125,42 +208,52 @@ class Server:
             pass
 
     def update_client_list(self):
-        """Rebuild the clients list from DB."""
+        """Rebuild the clients listbox with numeric IDs."""
         try:
             self.client_listbox.delete(0, tk.END)
             with self.db_lock:
-                clients = self.db_manager.get_rows_with_value("clients", "1", "1")
+                # Get all clients from DB
+                clients = self.db_manager.get_all_rows("clients")
             for client in clients:
+                # Index 0 is the new user_id
                 self.client_listbox.insert(tk.END, client[0])
-        except Exception:
-            pass
+        except Exception as e:
+            self.update_gui_log(f"Error updating list: {e}")
 
-    def show_client_details(self, client_id):
-        """Modernized popup for client details."""
-        if not client_id: return
+    def show_client_details(self, user_id):
+        """
+        Modernized popup for client details.
+        Updates 'Total Media' by counting actual history rows.
+        """
+        if not user_id: return
         with self.db_lock:
-            data = self.db_manager.get_rows_with_value("clients", "client_id", client_id)
+            # Get basic client info
+            data = self.db_manager.get_rows_with_value("clients", "user_id", user_id)
+            # Count actual media items in history
+            media_rows = self.db_manager.get_rows_with_value("decrypted_media", "user_id", user_id)
+            total_count = len(media_rows) if media_rows else 0
+
         if not data: return
         c = data[0]
 
         w = Toplevel(self.root)
-        w.title(f"Profile: {client_id}")
-        w.geometry("450x500")
+        w.title(f"Profile ID: {user_id}")
+        w.geometry("450x520")
         w.configure(bg="#1e1e1e")
 
-        # Header in popup
-        tk.Label(w, text=f"USER: {client_id}", font=("Consolas", 16, "bold"), 
+        tk.Label(w, text=f"USER ID: {user_id}", font=("Consolas", 16, "bold"), 
                  fg="#00ffcc", bg="#1e1e1e").pack(pady=20)
 
         info_frame = tk.Frame(w, bg="#252525", padx=20, pady=20, relief=tk.RIDGE, bd=1)
         info_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=10)
 
         details = [
-            ("IP Address", c[1]),
-            ("Port", c[2]),
-            ("Last Seen", c[3].strftime("%Y-%m-%d %H:%M") if c[3] else "N/A"),
-            ("Status", "SAFE" if not c[4] else "BANNED"),
-            ("Total Media", c[5])
+            ("Hashed Name", c[1]),
+            ("IP Address",  c[2]),
+            ("Port",        c[3]),
+            ("Last Seen",   c[4].strftime("%Y-%m-%d %H:%M") if c[4] else "N/A"),
+            ("Status",      "SAFE" if not c[5] else "BANNED"),
+            ("Total Media", total_count) # משתמש בספירה החדשה
         ]
 
         for label, value in details:
@@ -170,46 +263,40 @@ class Server:
             tk.Label(row, text=str(value), fg="white", bg="#252525", font=("Consolas", 10)).pack(side=tk.RIGHT)
 
         btn_history = tk.Button(w, text="VIEW MEDIA HISTORY", 
-                                command=lambda: self.show_client_history(client_id),
+                                command=lambda: self.show_client_history(user_id),
                                 bg="#00ffcc", fg="black", font=("Arial", 10, "bold"), 
-                                padx=20, relief=tk.FLAT)
+                                padx=20, relief=tk.FLAT, cursor="hand2")
         btn_history.pack(pady=20)
-
-    def show_client_history(self, client_id):
-        """Show another popup with all saved images (paths) for that client."""
+        
+    def show_client_history(self, user_id):
+        """
+        Show history popup. 
+        Matches the new INT user_id for the decrypted_media table.
+        """
         w = Toplevel()
-        w.title("Client %s - History" % client_id)
+        w.title("User %s - History" % user_id)
         w.geometry("600x400")
-        here = os.path.dirname(os.path.abspath(__file__))
-        bg_path = os.path.join(here, "background_img.jpg")
-        if os.path.exists(bg_path):
-            try:
-                bg_image = ImageTk.PhotoImage(Image.open(bg_path))
-                bg_label = Label(w, image=bg_image)
-                bg_label.image = bg_image
-                bg_label.place(relwidth=1, relheight=1)
-            except Exception:
-                pass
+        w.configure(bg="black")
 
-        Label(w, text="Client %s Image History" % client_id,
-              font=("Arial", 12, "bold"), fg="white", bg="black").pack(pady=5)
+        tk.Label(w, text="User %s Image History" % user_id,
+                 font=("Arial", 12, "bold"), fg="white", bg="black").pack(pady=5)
 
-        lb = Listbox(w, height=15, width=80, bg="black", fg="white", selectbackground="gray")
+        lb = tk.Listbox(w, height=15, width=80, bg="black", fg="white", selectbackground="gray")
         lb.pack(padx=10, pady=5, expand=True, fill="both")
 
         with self.db_lock:
-            rows = self.db_manager.get_rows_with_value("decrypted_media", "user_id", client_id)
+            # Query media using the correct user_id
+            rows = self.db_manager.get_rows_with_value("decrypted_media", "user_id", user_id)
+        
         if not rows:
-            lb.insert(tk.END, "No images found for this client.")
-            return
-
-        paths = [r[2] for r in rows]
-        for p in paths:
-            lb.insert(tk.END, p)
-
-        lb.bind("<Double-Button-1>",
-                lambda e: os.system('"%s"' % paths[lb.curselection()[0]]))
-
+            lb.insert(tk.END, "No images found for this user.")
+        else:
+            paths = [r[3] for r in rows] # Path is at index 3 in decrypted_media
+            for p in paths:
+                lb.insert(tk.END, p)
+            
+            # Double click to open the image file
+            lb.bind("<Double-Button-1>", lambda e: os.startfile(paths[lb.curselection()[0]]))
     # ======================
     # File helpers (save/original/processed)
     # ======================
@@ -424,7 +511,7 @@ class Server:
 
         k_auto = self._odd(max(19, min(101, int(min(H, W) * 0.05))))
         if ksize is None:
-            k = k_auto
+            k = self._odd(max(19, min(101, int(min(H, W) * 0.05))))
         else:
             k = self._odd(ksize)
 
@@ -460,54 +547,78 @@ class Server:
     # Client handling (authentication + menu loop)
     # ======================
     def handle_client(self, client_socket):
-        client_id = 'unknown'
-        encryptor = Encryption()  # per-client encryption instance
+        client_id_db = None  
+        display_name = "unknown"
+        encryptor = Encryption() 
+        
         try:
-            # --- Authentication
-            username = encryptor.receive_encrypted_message(client_socket)
-            # check ddos status
-            with self.db_lock:
-                user_data = self.db_manager.get_rows_with_value("clients", "client_id", username)
-                if user_data and user_data[0][4]: # ddos_status
-                    encryptor.send_encrypted_message(client_socket, "ACCESS DENIED: ACCOUNT BANNED.")
-                    return  #close connection
-            password = encryptor.receive_encrypted_message(client_socket)
-            hashed_password = get_hash_value(password)
+            # --- Authentication Loop ---
+            while True:
+                auth_action = encryptor.receive_encrypted_message(client_socket)
+                username = encryptor.receive_encrypted_message(client_socket)
+                password = encryptor.receive_encrypted_message(client_socket)
+                
+                u_hash = get_hash_value(username)
+                p_hash = get_hash_value(password)
+                display_name = username  
+                
+                client_ip, client_port = client_socket.getpeername()
 
-            client_ip, client_port = client_socket.getpeername()
-            with self.db_lock:
-                existing = self.db_manager.get_rows_with_value("clients", "client_id", username)
-
-            if existing:
-                stored_hash = existing[0][6]
-                if stored_hash != hashed_password:
-                    encryptor.send_encrypted_message(client_socket, "PASSWORD INCORRECT. DISCONNECTING.")
-                    client_socket.close()
-                    return
-                else:
-                    with self.db_lock:
-                        self.db_manager.update_row("clients", "client_id", username,
-                                                   ["last_seen"], [datetime.datetime.now()])
-                    encryptor.send_encrypted_message(client_socket, "WELCOME BACK")
-                    client_status = "EXISTING"
-                    total_actions = existing[0][5]
-            else:
                 with self.db_lock:
-                    self.db_manager.insert_row(
-                        "clients",
-                        "(client_id, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash)",
-                        "(%s, %s, %s, %s, %s, %s, %s)",
-                        (username, client_ip, client_port, datetime.datetime.now(), False, 0, hashed_password)
-                    )
-                encryptor.send_encrypted_message(
-                    client_socket,
-                    "WELCOME TO VeilGuard SERVER! NEW ACCOUNT CREATED."
-                )
-                client_status = "NEW"
-                total_actions = 0
+                    existing = self.db_manager.get_rows_with_value("clients", "username_hash", u_hash)
 
-            client_id = username
-            self.update_gui_log("Client %s connected - Status: %s" % (client_id, client_status))
+                if auth_action == "REGISTER":
+                    if existing:
+                        encryptor.send_encrypted_message(client_socket, "ERROR: Username already exists.")
+                        continue  # Wait for the next attempt
+                    else:
+                        with self.db_lock:
+                            self.db_manager.insert_row(
+                                "clients",
+                                "(username_hash, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash)",
+                                "(%s, %s, %s, %s, %s, %s, %s)",
+                                (u_hash, client_ip, client_port, datetime.datetime.now(), False, 0, p_hash)
+                            )
+                            new_user = self.db_manager.get_rows_with_value("clients", "username_hash", u_hash)
+                            client_id_db = new_user[0][0]
+                            total_actions = 0
+                            
+                        encryptor.send_encrypted_message(client_socket, "REGISTER_SUCCESS")
+                        client_status = "NEW"
+                        break  # Authentication successful, break the loop
+                        
+                elif auth_action == "LOGIN":
+                    if not existing:
+                        encryptor.send_encrypted_message(client_socket, "ERROR: User not found.")
+                        continue  # Wait for the next attempt
+                        
+                    user_data = existing[0]
+                    client_id_db = user_data[0]
+                    is_banned = user_data[5]
+                    stored_p_hash = user_data[7]
+                    
+                    if is_banned:
+                        encryptor.send_encrypted_message(client_socket, "ERROR: Account banned.")
+                        continue
+                        
+                    if stored_p_hash != p_hash:
+                        encryptor.send_encrypted_message(client_socket, "ERROR: PASSWORD INCORRECT.")
+                        continue
+                        
+                    with self.db_lock:
+                        self.db_manager.update_row("clients", "user_id", client_id_db, ["last_seen"], [datetime.datetime.now()])
+                        
+                    total_actions = user_data[6]
+                    encryptor.send_encrypted_message(client_socket, "LOGIN_SUCCESS")
+                    client_status = "EXISTING"
+                    break  # Authentication successful, break the loop
+                    
+                else:
+                    encryptor.send_encrypted_message(client_socket, "ERROR: Invalid action.")
+                    continue
+
+            # --- Authentication is done! Proceed to main functionality ---
+            self.update_gui_log("User %s connected (ID: %s) - Status: %s" % (display_name, client_id_db, client_status))
             self.update_client_list()
 
             # --- Main interaction loop
@@ -520,30 +631,30 @@ class Server:
                     option = encryptor.receive_encrypted_message(client_socket)
 
                     if option == "1":
-                        self.handle_option_1_blur_faces(client_socket, client_id, encryptor)
+                        self.handle_option_1_blur_faces(client_socket, client_id_db, encryptor)
                         total_actions += 1
                     elif option == "2":
-                        self.handle_option_2_blur_background(client_socket, client_id, encryptor)
+                        self.handle_option_2_blur_background(client_socket, client_id_db, encryptor)
                         total_actions += 1
                     elif option == "3":
-                        self.handle_option_3_user_selected_blur_receive(client_socket, client_id, encryptor)
+                        self.handle_option_3_user_selected_blur_receive(client_socket, client_id_db, encryptor)
                         total_actions += 1
                     elif option == "4":
-                        self.handle_logout(client_socket, client_id, encryptor)
+                        self.handle_logout(client_socket, client_id_db, display_name, encryptor)
                         break
                     else:
                         encryptor.send_encrypted_message(client_socket, "Invalid option.")
 
                     if option in ("1", "2", "3"):
                         with self.db_lock:
-                            self.db_manager.update_row("clients", "client_id", client_id,
+                            self.db_manager.update_row("clients", "user_id", client_id_db,
                                                        ["total_sent_media"], [total_actions])
 
                 except (ConnectionResetError, socket.error):
-                    self.update_gui_log("Client %s disconnected abruptly." % client_id)
+                    self.update_gui_log("Client %s disconnected abruptly." % client_id_db)
                     break
                 except Exception as e:
-                    self.update_gui_log("Error with client %s: %s" % (client_id, str(e)))
+                    self.update_gui_log("Error with client %s: %s" % (client_id_db, str(e)))
                     try:
                         encryptor.send_encrypted_message(client_socket, "[SERVER ERROR] %s" % str(e))
                     except Exception:
@@ -551,7 +662,7 @@ class Server:
                     break
 
         except Exception as e:
-            self.update_gui_log("Connection error with %s: %s" % (client_id, str(e)))
+            self.update_gui_log("Connection error with %s: %s" % (client_id_db, str(e)))
         finally:
                 # Remove from active connections
             with self.conn_lock:
@@ -562,7 +673,7 @@ class Server:
     # ======================
     # Command handlers (1/2/3/4)
     # ======================
-    def handle_option_1_blur_faces(self, client_socket, client_id, encryptor):
+    def handle_option_1_blur_faces(self, client_socket, user_id, encryptor):
         """
         Faces blur flow:
         - Read size: "0" for default image, or "<N>" and then read N bytes.
@@ -589,27 +700,31 @@ class Server:
                         break
                     buf += chunk
                     remaining -= len(chunk)
+            # --- הוספה: קבלת עוצמת הטשטוש ---
+            intensity_str = encryptor.receive_encrypted_message(client_socket)
+            blur_level = int(intensity_str)
+            custom_ksize = 21 + (blur_level * 28)  # ממפה 0-10 ל-1-101 (רק אי זוגי)
 
             # Save ORIGINAL
             orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
-                                                  prefix="%s_face_original" % client_id)
+                                                  prefix="%s_face_original" % user_id)
             with self.db_lock:
-                self.db_manager.insert_decrypted_media(client_id, 101, orig_path)
-            self.update_gui_log("Client %s: Face blur (original) -> %s" % (client_id, orig_path))
+                self.db_manager.insert_decrypted_media(user_id, 101, orig_path)
+            self.update_gui_log("Client %s: Face blur (original) -> %s" % (user_id, orig_path))
 
             # Decode + process
             np_arr = np.frombuffer(buf, dtype=np.uint8)
             img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if img_bgr is None:
                 raise ValueError("Failed to decode image")
-            out_bgr = self.blur_faces_bgr(img_bgr, 51)
+            out_bgr = self.blur_faces_bgr(img_bgr, custom_ksize)
 
             # Save PROCESSED
             out_path = self.save_bgr_image(out_bgr, base_dir="processed",
-                                           prefix="%s_face_processed" % client_id)
+                                           prefix="%s_face_processed" % user_id)
             with self.db_lock:
-                self.db_manager.insert_decrypted_media(client_id, 1, out_path)
-            self.update_gui_log("Client %s: Face blur (processed) -> %s" % (client_id, out_path))
+                self.db_manager.insert_decrypted_media(user_id, 1, out_path)
+            self.update_gui_log("Client %s: Face blur (processed) -> %s" % (user_id, out_path))
 
             # Send ORIGINAL
             encryptor.send_encrypted_message(client_socket, str(len(buf)))
@@ -626,7 +741,7 @@ class Server:
         except Exception as e:
             encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-    def handle_option_2_blur_background(self, client_socket, client_id, encryptor):
+    def handle_option_2_blur_background(self, client_socket, user_id, encryptor):
         """
         Background blur flow:
         - Read size: "0" for default image, or "<N>" and then read N bytes.
@@ -653,23 +768,27 @@ class Server:
                         break
                     buf += chunk
                     remaining -= len(chunk)
+            # --- הוספה: קבלת עוצמת הטשטוש ---
+            intensity_str = encryptor.receive_encrypted_message(client_socket)
+            blur_level = int(intensity_str)
+            custom_ksize = 21 + (blur_level * 28)  # ממפה 0-10 ל-1-101 (רק אי זוגי)
 
             # Save ORIGINAL
             orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
-                                                  prefix="%s_background_original" % client_id)
+                                                  prefix="%s_background_original" % user_id)
             with self.db_lock:
-                self.db_manager.insert_decrypted_media(client_id, 102, orig_path)
-            self.update_gui_log("Client %s: Background blur (original) -> %s" % (client_id, orig_path))
+                self.db_manager.insert_decrypted_media(user_id, 102, orig_path)
+            self.update_gui_log("Client %s: Background blur (original) -> %s" % (user_id, orig_path))
 
             # Process (keep persons sharp)
-            out_bgr = self.blur_background_bgr_from_bytes(buf, 51)
+            out_bgr = self.blur_background_bgr_from_bytes(buf, custom_ksize)
 
             # Save PROCESSED
             out_path = self.save_bgr_image(out_bgr, base_dir="processed",
-                                           prefix="%s_background_processed" % client_id)
+                                           prefix="%s_background_processed" % user_id)
             with self.db_lock:
-                self.db_manager.insert_decrypted_media(client_id, 2, out_path)
-            self.update_gui_log("Client %s: Background blur (processed) -> %s" % (client_id, out_path))
+                self.db_manager.insert_decrypted_media(user_id, 2, out_path)
+            self.update_gui_log("Client %s: Background blur (processed) -> %s" % (user_id, out_path))
 
             # Send ORIGINAL
             encryptor.send_encrypted_message(client_socket, str(len(buf)))
@@ -686,7 +805,7 @@ class Server:
         except Exception as e:
             encryptor.send_encrypted_message(client_socket, "[ERROR] %s" % str(e))
 
-    def handle_option_3_user_selected_blur_receive(self, client_socket, client_id, encryptor):
+    def handle_option_3_user_selected_blur_receive(self, client_socket, user_id, encryptor):
         """
         Option 3 (User ROI blur, server-side processing):
         Server sends [SERVER_READY]
@@ -725,9 +844,9 @@ class Server:
 
         # Save ORIGINAL
         orig_path = self.save_raw_image_bytes(buf, base_dir="processed",
-                                              prefix=f"{client_id}_roi_original")
+                                              prefix=f"{user_id}_roi_original")
         with self.db_lock:
-            self.db_manager.insert_decrypted_media(client_id, 103, orig_path)
+            self.db_manager.insert_decrypted_media(user_id, 103, orig_path)
 
         # Send ORIGINAL back to client
         encryptor.send_encrypted_message(client_socket, str(len(buf)))
@@ -741,6 +860,10 @@ class Server:
 
         # Receive ROI list JSON
         rects_json = encryptor.receive_encrypted_message(client_socket)
+        # --- הוספה: קבלת עוצמת הטשטוש ---
+        intensity_str = encryptor.receive_encrypted_message(client_socket)
+        blur_level = int(intensity_str)
+        custom_ksize = 21 + (blur_level * 28)  # ממפה 0-10 ל-1-101 (רק אי זוגי)
         try:
             rects = json.loads(rects_json)  # Format: [[x, y, w, h], ...]
             assert isinstance(rects, list)
@@ -770,14 +893,14 @@ class Server:
 
             k = max(21, 2 * (min(w, h) // 3) + 1)
             patch = out[y:y + h, x:x + w]
-            patch_blur = cv2.GaussianBlur(patch, (k, k), 0)
+            patch_blur = cv2.GaussianBlur(patch, (custom_ksize, custom_ksize), 0)
             out[y:y + h, x:x + w] = patch_blur
 
         # Save PROCESSED
         out_path = self.save_bgr_image(out, base_dir="processed",
-                                       prefix=f"{client_id}_roi_processed")
+                                       prefix=f"{user_id}_roi_processed")
         with self.db_lock:
-            self.db_manager.insert_decrypted_media(client_id, 3, out_path)
+            self.db_manager.insert_decrypted_media(user_id, 3, out_path)
 
         # Send processed image back
         ok, enc = cv2.imencode(".jpg", out)
@@ -788,15 +911,15 @@ class Server:
         encryptor.send_encrypted_message(client_socket, str(len(out_bytes)))
         client_socket.sendall(out_bytes)
 
-    def handle_logout(self, client_socket, client_id, encryptor):
+    def handle_logout(self, client_socket, user_id, display_name, encryptor):
         """
         Acknowledge logout, update last_seen, and close the socket gracefully.
         """
         try:
-            self.update_gui_log("Client %s requested logout" % client_id)
+            self.update_gui_log("User %s requested logout" % display_name)
             try:
                 with self.db_lock:
-                    self.db_manager.update_row("clients", "client_id", client_id,
+                    self.db_manager.update_row("clients", "user_id", user_id,
                                                ["last_seen"], [datetime.datetime.now()])
             except Exception:
                 pass
@@ -812,7 +935,7 @@ class Server:
                 client_socket.close()
             except Exception:
                 pass
-            self.update_gui_log("Connection with %s closed after logout" % client_id)
+            self.update_gui_log("Connection with %s closed after logout" % display_name)
 
     # ======================
     # Server control
@@ -830,7 +953,7 @@ class Server:
             # 1. בדיקה האם ה-IP חסום בגלל DDoS במסד הנתונים
             with self.db_lock:
                 existing_clients = self.db_manager.get_rows_with_value("clients", "client_ip", client_ip)
-                if existing_clients and any(c[4] for c in existing_clients): # אינדקס 4 הוא ddos_status
+                if existing_clients and any(c[5] for c in existing_clients): # אינדקס 4 הוא ddos_status
                     self.update_gui_log(f"Blocked connection attempt from banned IP: {client_ip}")
                     client_socket.close()
                     continue
@@ -872,7 +995,6 @@ class Server:
 
     def create_gui(self):
             """Build a modern, Dark-themed Cyber Control Center GUI."""
-            self.root.deiconify()
             self.root.title("VeilGuard | Secure Server Control Center")
             self.root.geometry("1100x700")
             self.root.configure(bg="#121212")  # Dark Background
@@ -898,7 +1020,7 @@ class Server:
             left_frame = tk.Frame(main_container, bg="#121212", width=300)
             left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 20))
 
-            tk.Label(left_frame, text="ACTIVE CLIENTS", fg="#00ffcc", bg="#121212", font=header_font).pack(anchor="w")
+            tk.Label(left_frame, text="REGISTERED CLIENTS", fg="#00ffcc", bg="#121212", font=header_font).pack(anchor="w")
             
             self.client_listbox = tk.Listbox(left_frame, bg="#1e1e1e", fg="#ffffff", 
                                             font=("Consolas", 11), borderwidth=0, 
@@ -931,10 +1053,9 @@ class Server:
             
             threading.Thread(target=self.start_server, daemon=True).start()
             self.update_client_list()
-            self.root.mainloop()
+      
 
 
 if __name__ == "__main__":
     server = Server()
-    server.create_gui()
 # =======================
