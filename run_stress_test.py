@@ -32,18 +32,15 @@ def run_single_client(client_id, cred_file):
 
     success = client.send_credentials(None, auto_file=cred_file)
     
-    if success:
-        print(f"[Thread {client_id}] SUCCESS! Holding connection to trigger DDoS...")
-        # השורה הכי חשובה: נשארים מחוברים 15 שניות בלי לעשות כלום
-        # זה יגרום ל-active_connections בשרת לגדול
-        time.sleep(15) 
-        try:
-            client.client_socket.close()
-        except: pass
-    else:
-        print(f"[Thread {client_id}] FAILED/REJECTED")
+    # --- שינוי כאן: כולם מחזיקים את החיבור, לא משנה אם הצליחו או נכשלו ---
+    print(f"[Thread {client_id}] Result: {success}. Holding connection...")
     
-    client.client_socket.close()
+    # עכשיו כל 20 הלקוחות יישארו "תקועים" בשרת למשך 15 שניות
+    time.sleep(15) 
+    
+    try:
+        client.client_socket.close()
+    except: pass
 
 if __name__ == "__main__":
     TOTAL_CLIENTS = 20 # עכשיו זה באמת יריץ 20
@@ -52,7 +49,7 @@ if __name__ == "__main__":
     files = ([f"test_creds/success_{i}.txt" for i in range(1, 7)] + 
              [f"test_creds/fail_{i}.txt" for i in range(1, 3)] + 
              [f"test_creds/signup_{i}.txt" for i in range(1, 3)])
-    
+    files.append(None) # מוסיף "לקוח אנושי" ללא קובץ כדי להפעיל את ה-UI
     threads = []
     print(f"--- Launching {TOTAL_CLIENTS} clients ---")
     for i in range(TOTAL_CLIENTS):

@@ -986,7 +986,7 @@ class Server:
                     # עדכון מסד הנתונים - סימון ddos_status כ-True לכל המשתמשים ששימשו ב-IP זה
                     with self.db_lock:
                         for c_row in existing_clients:
-                            self.db_manager.update_row("clients", "client_id", c_row[0], ["ddos_status"], [True])
+                            self.db_manager.update_row("clients", "user_id", c_row[0], ["ddos_status"], [True])
                     continue
 
                 # אם הכל תקין - הוספה לרשימת החיבורים והפעלת הטיפול בלקוח
