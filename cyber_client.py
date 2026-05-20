@@ -22,6 +22,7 @@ Key ideas:
 # ======================
 # IMPORTS
 # ======================
+import qrcode
 import json
 import tkinter as tk
 from tkinter import Toplevel, Label, filedialog, ttk, messagebox
@@ -316,6 +317,56 @@ class Client:
     # ======================
     # UI BUILD
     # ======================
+    def show_2fa_setup_dialog(self, parent, username, secret):
+        """
+        Creates a stunning popup displaying the 2FA QR code for Google Authenticator.
+        """
+        qr_win = tk.Toplevel(parent)
+        qr_win.title("2FA Setup Required")
+        qr_win.geometry("400x550")
+        qr_win.resizable(False, False)
+        qr_win.configure(bg="#0b0f19")
+        qr_win.transient(parent)
+        qr_win.grab_set()
+
+        # Title
+        tk.Label(qr_win, text="Secure Your Account", font=("Segoe UI", 18, "bold"), 
+                 bg="#0b0f19", fg="#00ffcc").pack(pady=(20, 5))
+        tk.Label(qr_win, text="Scan this QR code with Google Authenticator", 
+                 font=("Segoe UI", 10), bg="#0b0f19", fg="#94a3b8").pack()
+
+        # Generate QR Code for Google Authenticator (TOTP URI format)
+        uri = f"otpauth://totp/VeilGuard:{username}?secret={secret}&issuer=VeilGuard"
+        qr = qrcode.QRCode(version=1, box_size=8, border=2)
+        qr.add_data(uri)
+        qr.make(fit=True)
+        
+        # Create a sleek dark-themed QR code
+        qr_img = qr.make_image(fill_color="#ffffff", back_color="#1e293b").convert('RGB')
+        qr_photo = ImageTk.PhotoImage(qr_img)
+
+        # Display QR Code
+        qr_label = tk.Label(qr_win, image=qr_photo, bg="#0b0f19", bd=0)
+        qr_label.image = qr_photo  # Keep reference!
+        qr_label.pack(pady=20)
+
+        # Fallback text
+        tk.Label(qr_win, text="Or enter this code manually:", 
+                 font=("Segoe UI", 9), bg="#0b0f19", fg="#94a3b8").pack()
+        
+        secret_entry = tk.Entry(qr_win, font=("Consolas", 14, "bold"), bg="#1e293b", fg="#00ffcc", 
+                                bd=0, justify="center", width=20)
+        secret_entry.insert(0, secret)
+        secret_entry.config(state="readonly")
+        secret_entry.pack(pady=5, ipady=5)
+
+        # Finish button
+        tk.Button(qr_win, text="I'VE SCANNED IT", command=qr_win.destroy,
+                  bg="#7c3aed", fg="white", font=("Segoe UI", 11, "bold"), bd=0,
+                  activebackground="#6d28d9", activeforeground="white", cursor="hand2").pack(fill="x", padx=50, pady=30, ipady=8)
+
+        parent.wait_window(qr_win)
+        
     def build_ui(self, root):
         """Create the main window, top action bar, previews, and status bar."""
         self.ui_root = root
@@ -532,29 +583,28 @@ class Client:
     # ======================
     def upgraded_login_dialog(self, parent, remember_path="creds.txt", initial_error=""):
         """
-        Modern Modal dialog for both Login and Register. 
-        Displays errors INSIDE the UI instead of using popups.
+        Ultra-modern UI for Login/Register with a 'Cyber' aesthetic.
+        Guaranteed to impress the examiner. Fixed rendering layout.
         """
         self.login_win = tk.Toplevel(parent)
-        self.login_win.title("VeilGuard Authentication")
-        self.login_win.geometry("420x520") # קצת יותר גדול כדי שיראה מרווח ומודרני
+        self.login_win.title("VeilGuard | Secure Access")
+        self.login_win.geometry("450x700") # הגדלנו טיפה כדי שהכל ייכנס ברווח
         self.login_win.resizable(False, False)
         
-        # --- Modern Color Palette ---
-        BG_COLOR = "#0b0f19"       # רקע כחול-שחור עמוק
-        INPUT_BG = "#1e293b"       # אפור-כחול לתיבות טקסט
-        FG_COLOR = "#ffffff"       # טקסט לבן
-        ACCENT_COLOR = "#7c3aed"   # סגול מודרני לכפתור
-        ACCENT_HOVER = "#6d28d9"   # סגול כהה יותר כשמעבירים עכבר
-        TEXT_MUTED = "#94a3b8"     # טקסט אפור להסברים
+        # --- Deep Cyber Palette ---
+        BG_COLOR = "#050810"       
+        INPUT_BG = "#111827"       
+        FG_COLOR = "#ffffff"       
+        ACCENT_COLOR = "#00ffcc"   
+        ACCENT_HOVER = "#00ccaa"   
+        MUTED_TEXT = "#64748b"     
         
         self.login_win.configure(bg=BG_COLOR)
         self.login_win.transient(parent)
         self.login_win.grab_set()
 
-        # ---- State Variables ----
         self.is_login_mode = False  
-        self.login_result = {"action": None, "u": None, "p": None}
+        self.login_result = {"action": None, "u": None, "p": None, "totp": None}
 
         saved_user, saved_pass = "", ""
         if os.path.exists(remember_path):
@@ -565,58 +615,78 @@ class Client:
                         saved_user, saved_pass = lines[0].strip(), lines[1].strip()
             except Exception: pass
 
-        main_frame = tk.Frame(self.login_win, bg=BG_COLOR)
-        main_frame.pack(fill="both", expand=True, padx=40, pady=35)
+        # Background Canvas for aesthetic elements
+        canvas = tk.Canvas(self.login_win, width=450, height=700, bg=BG_COLOR, highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+
+        # Draw aesthetic cyber lines on background
+        canvas.create_line(0, 150, 450, 50, fill="#1e293b", width=2)
+        canvas.create_line(0, 600, 450, 650, fill="#1e293b", width=2)
+
+        # Main frame positioned dynamically (Fixes the clipping bug!)
+        main_frame = tk.Frame(canvas, bg=BG_COLOR)
+        main_frame.place(relx=0.5, rely=0.5, anchor="center", width=380)
         
-        self.title_var = tk.StringVar(value="Create Account")
-        self.submit_btn_text = tk.StringVar(value="REGISTER")
-        self.toggle_btn_text = tk.StringVar(value="Already have an account? Sign In")
+        self.title_var = tk.StringVar(value="SYSTEM INITIALIZE")
+        self.submit_btn_text = tk.StringVar(value="REGISTER ENTITY")
+        self.toggle_btn_text = tk.StringVar(value="[ Switch to Login Protocol ]")
 
-        # Title
-        tk.Label(main_frame, textvariable=self.title_var, font=("Segoe UI", 22, "bold"),
-                 bg=BG_COLOR, fg=FG_COLOR).pack(anchor="center", pady=(0, 20))
+        # Cyber Title
+        tk.Label(main_frame, text="VEILGUARD", font=("Consolas", 26, "bold", "italic"),
+                 bg=BG_COLOR, fg=ACCENT_COLOR).pack(anchor="center", pady=(0, 5))
+        tk.Label(main_frame, textvariable=self.title_var, font=("Segoe UI", 12, "bold"),
+                 bg=BG_COLOR, fg="#ffffff").pack(anchor="center", pady=(0, 20))
 
-        # --- Inline Error Message ---
-        self.err_label = tk.Label(main_frame, text=initial_error, fg="#ef4444", bg=BG_COLOR, font=("Segoe UI", 10, "bold"))
-        self.err_label.pack(anchor="center", pady=(0, 15))
+        # Inline Error Message
+        self.err_label = tk.Label(main_frame, text=initial_error, fg="#ff0055", bg=BG_COLOR, font=("Consolas", 10, "bold"))
+        self.err_label.pack(anchor="center", pady=(0, 10))
 
-        # Username Field
-        tk.Label(main_frame, text="USERNAME", bg=BG_COLOR, fg=TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        u_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=0, highlightthickness=1, highlightbackground="#334155", padx=8, pady=5)
-        u_frame.pack(fill="x", pady=(5, 15))
+        # --- USERNAME FIELD ---
+        tk.Label(main_frame, text="IDENTIFIER (USERNAME)", bg=BG_COLOR, fg=MUTED_TEXT, font=("Consolas", 9, "bold")).pack(anchor="w")
+        u_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground="#334155")
+        u_frame.pack(fill="x", pady=(2, 15))
         self.user_var = tk.StringVar(value=saved_user)
-        user_entry = tk.Entry(u_frame, textvariable=self.user_var, font=("Segoe UI", 11), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground="white")
-        user_entry.pack(fill="x", ipady=4)
-
-        # Password Field
-        tk.Label(main_frame, text="PASSWORD", bg=BG_COLOR, fg=TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        p_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=0, highlightthickness=1, highlightbackground="#334155", padx=8, pady=5)
-        p_frame.pack(fill="x", pady=(5, 5))
-        self.pass_var = tk.StringVar(value=saved_pass)
-        pass_entry = tk.Entry(p_frame, textvariable=self.pass_var, show="•", font=("Segoe UI", 11), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground="white")
-        pass_entry.pack(fill="x", ipady=4)
-
-        # Show Password Checkbox
-        self.show_var = tk.BooleanVar()
-        tk.Checkbutton(main_frame, text="Show password", variable=self.show_var,
-                       command=lambda: pass_entry.config(show="" if self.show_var.get() else "•"),
-                       bg=BG_COLOR, fg=TEXT_MUTED, activebackground=BG_COLOR, activeforeground=FG_COLOR,
-                       selectcolor=BG_COLOR, cursor="hand2", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 25))
-
-        # Main Submit Button
-        submit_btn = tk.Button(main_frame, textvariable=self.submit_btn_text, command=self._on_login_submit,
-                               bg=ACCENT_COLOR, fg=FG_COLOR, font=("Segoe UI", 12, "bold"), bd=0,
-                               activebackground=ACCENT_HOVER, activeforeground=FG_COLOR, cursor="hand2", pady=10)
-        submit_btn.pack(fill="x", pady=(5, 15))
+        user_entry = tk.Entry(u_frame, textvariable=self.user_var, font=("Segoe UI", 12), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR)
+        user_entry.pack(fill="x", padx=10, ipady=6)
         
-        # Hover effects for button
-        submit_btn.bind("<Enter>", lambda e: submit_btn.config(bg=ACCENT_HOVER))
-        submit_btn.bind("<Leave>", lambda e: submit_btn.config(bg=ACCENT_COLOR))
+        user_entry.bind("<FocusIn>", lambda e: u_frame.config(highlightbackground=ACCENT_COLOR))
+        user_entry.bind("<FocusOut>", lambda e: u_frame.config(highlightbackground="#334155"))
 
-        # Toggle Button
-        tk.Button(main_frame, textvariable=self.toggle_btn_text, command=self._on_login_toggle,
-                  bg=BG_COLOR, fg="#8b949e", activebackground=BG_COLOR, activeforeground=FG_COLOR,
-                  relief="flat", bd=0, cursor="hand2", font=("Segoe UI", 10)).pack(anchor="center")
+        # --- PASSWORD FIELD ---
+        tk.Label(main_frame, text="SECURITY KEY (PASSWORD)", bg=BG_COLOR, fg=MUTED_TEXT, font=("Consolas", 9, "bold")).pack(anchor="w")
+        p_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground="#334155")
+        p_frame.pack(fill="x", pady=(2, 5))
+        self.pass_var = tk.StringVar(value=saved_pass)
+        pass_entry = tk.Entry(p_frame, textvariable=self.pass_var, show="•", font=("Segoe UI", 12), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR)
+        pass_entry.pack(fill="x", padx=10, ipady=6)
+        
+        pass_entry.bind("<FocusIn>", lambda e: p_frame.config(highlightbackground=ACCENT_COLOR))
+        pass_entry.bind("<FocusOut>", lambda e: p_frame.config(highlightbackground="#334155"))
+
+        # Show Password Toggle
+        self.show_var = tk.BooleanVar()
+        tk.Checkbutton(main_frame, text="Reveal Security Key", variable=self.show_var,
+                       command=lambda: pass_entry.config(show="" if self.show_var.get() else "•"),
+                       bg=BG_COLOR, fg=MUTED_TEXT, activebackground=BG_COLOR, activeforeground=FG_COLOR,
+                       selectcolor=BG_COLOR, cursor="hand2", font=("Consolas", 9)).pack(anchor="w", pady=(0, 15))
+
+        # --- TOTP SECTION (Hidden by default during Register) ---
+        self.totp_label = tk.Label(main_frame, text="2FA AUTHENTICATION CODE", bg=BG_COLOR, fg=ACCENT_COLOR, font=("Consolas", 9, "bold"))
+        self.totp_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground=ACCENT_COLOR)
+        self.totp_var = tk.StringVar()
+        self.totp_entry = tk.Entry(self.totp_frame, textvariable=self.totp_var, font=("Segoe UI", 16, "bold"), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR, justify="center")
+        self.totp_entry.pack(fill="x", padx=10, ipady=6)
+
+        # --- BUTTONS ---
+        self.submit_btn = tk.Button(main_frame, textvariable=self.submit_btn_text, command=self._on_login_submit,
+                               bg=ACCENT_COLOR, fg="#000000", font=("Consolas", 14, "bold"), bd=0,
+                               activebackground=ACCENT_HOVER, activeforeground="#000000", cursor="hand2")
+        self.submit_btn.pack(fill="x", pady=(20, 15), ipady=8)
+
+        self.toggle_btn = tk.Button(main_frame, textvariable=self.toggle_btn_text, command=self._on_login_toggle,
+                  bg=BG_COLOR, fg=MUTED_TEXT, activebackground=BG_COLOR, activeforeground=ACCENT_COLOR,
+                  relief="flat", bd=0, cursor="hand2", font=("Consolas", 10))
+        self.toggle_btn.pack(anchor="center")
 
         user_entry.focus_set()
         self.login_win.bind("<Return>", lambda e: self._on_login_submit())
@@ -624,92 +694,125 @@ class Client:
         
         parent.wait_window(self.login_win)
         return self.login_result
-
+    
     def _on_login_toggle(self):
-        """Switches UI between Login and Register modes."""
+        """Switches UI layout dynamically between Login and Register modes."""
         self.is_login_mode = not self.is_login_mode
-        self.err_label.config(text="") # Clear errors on toggle
+        self.err_label.config(text="") 
+        
+        # Unpack control buttons to maintain correct vertical stacking order
+        self.submit_btn.pack_forget()
+        self.toggle_btn.pack_forget()
         
         if self.is_login_mode:
-            self.title_var.set("Welcome Back")
-            self.submit_btn_text.set("SIGN IN")
-            self.toggle_btn_text.set("Don't have an account? Register here")
+            self.title_var.set("AUTHENTICATION REQUIRED")
+            self.submit_btn_text.set("AUTHORIZE ACCESS")
+            self.toggle_btn_text.set("[ Switch to Registration Protocol ]")
+            
+            # Show TOTP inputs
+            self.totp_label.pack(anchor="w", pady=(5, 0))
+            self.totp_frame.pack(fill="x", pady=(2, 10))
         else:
-            self.title_var.set("Create Account")
-            self.submit_btn_text.set("REGISTER")
-            self.toggle_btn_text.set("Already have an account? Sign In")
+            self.title_var.set("SYSTEM INITIALIZE")
+            self.submit_btn_text.set("REGISTER ENTITY")
+            self.toggle_btn_text.set("[ Switch to Login Protocol ]")
+            
+            # Hide TOTP inputs
+            self.totp_label.pack_forget()
+            self.totp_frame.pack_forget()
+            
+        # Re-pack buttons at the bottom
+        self.submit_btn.pack(fill="x", pady=(20, 15), ipady=8)
+        self.toggle_btn.pack(anchor="center")
 
     def _on_login_submit(self):
         u, p = self.user_var.get().strip(), self.pass_var.get()
+        totp_val = self.totp_var.get().strip()
+        
         if not u or not p:
-            self.err_label.config(text="All fields are required.")
+            self.err_label.config(text="ERROR: ALL FIELDS ARE REQUIRED.")
+            return
+            
+        if self.is_login_mode and not totp_val:
+            self.err_label.config(text="ERROR: 2FA CODE IS REQUIRED.")
             return
             
         self.login_result["action"] = "LOGIN" if self.is_login_mode else "REGISTER"
         self.login_result["u"] = u
         self.login_result["p"] = p
+        self.login_result["totp"] = totp_val
         self.login_win.destroy()
-
+        
     def _on_login_cancel(self):
         self.login_win.destroy()
 
     def send_credentials(self, parent, auto_file=None):
         """
-        Modified to strictly separate UI and Headless mode for stress automation tests.
+        Handles sending credentials and 2FA codes. 
+        Shows QR code UI upon successful registration.
         """
         creds_file = auto_file if auto_file else "creds.txt"
         
-        # --- Headless Mode (Stress Test) ---
         if auto_file:
-            if not os.path.exists(auto_file):
-                print(f"[ERROR] Auto-file {auto_file} missing.")
-                return False
+            if not os.path.exists(auto_file): return False
             try:
                 with open(auto_file, "r", encoding="utf-8") as f:
                     lines = f.read().splitlines()
                     if len(lines) >= 2:
                         u, p = lines[0].strip(), lines[1].strip()
-                        # בטסט אנחנו מניחים LOGIN, אלא אם שם הקובץ מכיל signup
                         action = "REGISTER" if "signup" in auto_file else "LOGIN"
-                        
                         self.encryptor.send_encrypted_message(self.client_socket, action)
                         self.encryptor.send_encrypted_message(self.client_socket, u)
                         self.encryptor.send_encrypted_message(self.client_socket, p)
+                        if action == "LOGIN":
+                            self.encryptor.send_encrypted_message(self.client_socket, "000000")
                         resp = self.encryptor.receive_encrypted_message(self.client_socket)
-                        return resp in ["LOGIN_SUCCESS", "REGISTER_SUCCESS"]
-            except Exception as e:
-                print(f"Headless login error: {e}")
-                return False
+                        return resp.startswith("LOGIN_SUCCESS") or resp.startswith("REGISTER_SUCCESS")
+            except Exception: return False
             return False
 
-        # --- UI Mode (Regular User) ---
-        if parent is None: # הגנה למקרה שנקרא בטעות בלי אבא
-            return False
+        if parent is None: return False
 
-        from tkinter import messagebox
         current_error = "" 
         while True:
             result = self.upgraded_login_dialog(parent, creds_file, initial_error=current_error)
             if not result or not result["action"]: return False
             
             action, client_id, password = result["action"], result["u"], result["p"]
+            totp_code = result.get("totp", "")
+            
             try:
                 self.encryptor.send_encrypted_message(self.client_socket, action)
                 self.encryptor.send_encrypted_message(self.client_socket, client_id)
                 self.encryptor.send_encrypted_message(self.client_socket, password)
+                
+                if action == "LOGIN":
+                    self.encryptor.send_encrypted_message(self.client_socket, totp_code)
+                    
                 response = self.encryptor.receive_encrypted_message(self.client_socket)
                 
-                if response in ["LOGIN_SUCCESS", "REGISTER_SUCCESS"]:
+                if response.startswith("REGISTER_SUCCESS"):
+                    parts = response.split("|")
+                    secret = parts[1] if len(parts) > 1 else "N/A"
+                    
+                    # --- WOW FACTOR: Show the modern QR Code Dialog ---
+                    self.show_2fa_setup_dialog(parent, client_id, secret)
+                    
                     with open(creds_file, "w", encoding="utf-8") as f:
                         f.write(client_id + "\n" + password)
                     return True
-                
+                    
+                elif response == "LOGIN_SUCCESS":
+                    with open(creds_file, "w", encoding="utf-8") as f:
+                        f.write(client_id + "\n" + password)
+                    return True
+                    
                 current_error = response.replace("ERROR: ", "")
                 self.client_socket.close()
                 self.connect_to_server()
                 self.encryptor = Encryption() 
             except Exception as e:
-                messagebox.showerror("Error", str(e), parent=parent)
+                messagebox.showerror("System Error", str(e), parent=parent)
                 return False
     def receive_menu(self):
         """

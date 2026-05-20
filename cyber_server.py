@@ -25,7 +25,7 @@
 # - MediaPipe is assumed to be installed on the SERVER machine.
 # - All debug prints removed (only GUI log).
 # - No type annotations to remain compatible with older Python interpreters.
-
+import pyotp
 import json
 import socket
 import threading
@@ -35,7 +35,7 @@ from constants import *
 from db_manager import DatabaseManager
 from create_tables import create_all_tables, populate_media_types
 import datetime
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ExifTags
 import os
 import pygame
 import time
@@ -45,6 +45,7 @@ import cv2
 import numpy as np
 import random
 import mediapipe as mp  # Assumed installed on server
+import io
 
 
 class Server:
@@ -186,6 +187,52 @@ class Server:
         self.root.deiconify() 
         self.root.attributes("-topmost", True)
         self.root.after(100, lambda: self.root.attributes("-topmost", False))
+        
+    # ======================
+    # 2 Security Features 
+    # ======================
+    def perform_privacy_audit_and_strip(self, image_bytes, user_id):
+        """
+        מבצע Privacy Audit למטא-דאטה (EXIF), מתריע על מיקומי GPS,
+        ומחזיר מחרוזת Bytes של התמונה כשהיא נקייה ממידע נסתר.
+        """
+        try:
+            # קריאת התמונה מתוך ה-Bytes
+            img = Image.open(io.BytesIO(image_bytes))
+            
+            # --- שלב 1: Privacy Audit ---
+            exif_data = img._getexif()
+            if exif_data:
+                self.update_gui_log(f"[AUDIT] EXIF metadata found for user {user_id}.")
+                gps_detected = False
+                
+                for tag_id, value in exif_data.items():
+                    tag = ExifTags.TAGS.get(tag_id, tag_id)
+                    if tag == 'GPSInfo':
+                        gps_detected = True
+                        self.update_gui_log(f"[ALERT] High Privacy Risk: GPS Location data detected!")
+                
+                if not gps_detected:
+                    self.update_gui_log(f"[AUDIT] Minor EXIF data found (Device/Timestamp).")
+            else:
+                self.update_gui_log(f"[AUDIT] Image is clean. No EXIF metadata.")
+
+            # --- שלב 2: Stripping ---
+            # העתקת הפיקסלים בלבד לקובץ חדש (ללא שמירת ה-info המקורי)
+            data = list(img.getdata())
+            clean_img = Image.new(img.mode, img.size)
+            clean_img.putdata(data)
+
+            out_io = io.BytesIO()
+            # שמירה ללא פרמטר exif תסיר אותו לחלוטין
+            clean_img.save(out_io, format=img.format or "JPEG")
+            self.update_gui_log(f"[AUDIT] Metadata stripped successfully.")
+            
+            return out_io.getvalue()
+
+        except Exception as e:
+            self.update_gui_log(f"[ERROR] Privacy Audit failed: {e}")
+            return image_bytes # במקרה של קריסה, מחזיר את המקור כדי לא לתקוע את השרת
 
     # ======================
     # GUI helpers
@@ -572,30 +619,41 @@ class Server:
                         encryptor.send_encrypted_message(client_socket, "ERROR: Username already exists.")
                         continue  # Wait for the next attempt
                     else:
+                        # Generate a unique 2FA secret for the new user
+                        totp_secret = pyotp.random_base32()
+                        
                         with self.db_lock:
+                            # Note: Ensure 'totp_secret' column is created in your DB
                             self.db_manager.insert_row(
                                 "clients",
-                                "(username_hash, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash)",
-                                "(%s, %s, %s, %s, %s, %s, %s)",
-                                (u_hash, client_ip, client_port, datetime.datetime.now(), False, 0, p_hash)
+                                "(username_hash, client_ip, client_port, last_seen, ddos_status, total_sent_media, password_hash, totp_secret)",
+                                "(%s, %s, %s, %s, %s, %s, %s, %s)",
+                                (u_hash, client_ip, client_port, datetime.datetime.now(), False, 0, p_hash, totp_secret)
                             )
                             new_user = self.db_manager.get_rows_with_value("clients", "username_hash", u_hash)
                             client_id_db = new_user[0][0]
                             total_actions = 0
                             
-                        encryptor.send_encrypted_message(client_socket, "REGISTER_SUCCESS")
+                        # Send status and the secret key to client
+                        encryptor.send_encrypted_message(client_socket, f"REGISTER_SUCCESS|{totp_secret}")
                         client_status = "NEW"
-                        break  # Authentication successful, break the loop
+                        break  # Authentication successful
                         
                 elif auth_action == "LOGIN":
+                    # For login, we also expect the TOTP code from the client
+                    totp_code = encryptor.receive_encrypted_message(client_socket)
+                    
                     if not existing:
                         encryptor.send_encrypted_message(client_socket, "ERROR: User not found.")
-                        continue  # Wait for the next attempt
+                        continue  
                         
                     user_data = existing[0]
                     client_id_db = user_data[0]
                     is_banned = user_data[5]
                     stored_p_hash = user_data[7]
+                    
+                    # Ensure index 8 matches your database schema for totp_secret
+                    stored_totp_secret = user_data[8] 
                     
                     if is_banned:
                         encryptor.send_encrypted_message(client_socket, "ERROR: Account banned.")
@@ -605,13 +663,19 @@ class Server:
                         encryptor.send_encrypted_message(client_socket, "ERROR: PASSWORD INCORRECT.")
                         continue
                         
+                    # Verify 2FA code
+                    totp = pyotp.TOTP(stored_totp_secret)
+                    if not totp.verify(totp_code):
+                        encryptor.send_encrypted_message(client_socket, "ERROR: Invalid 2FA Code.")
+                        continue
+                        
                     with self.db_lock:
                         self.db_manager.update_row("clients", "user_id", client_id_db, ["last_seen"], [datetime.datetime.now()])
                         
                     total_actions = user_data[6]
                     encryptor.send_encrypted_message(client_socket, "LOGIN_SUCCESS")
                     client_status = "EXISTING"
-                    break  # Authentication successful, break the loop
+                    break  
                     
                 else:
                     encryptor.send_encrypted_message(client_socket, "ERROR: Invalid action.")
@@ -664,12 +728,15 @@ class Server:
         except Exception as e:
             self.update_gui_log("Connection error with %s: %s" % (client_id_db, str(e)))
         finally:
-                # Remove from active connections
+            # Remove from active connections
             with self.conn_lock:
                 self.active_connections = [c for c in self.active_connections if c[0] != client_socket]
             client_socket.close()
-            self.update_gui_log(f"Connection closed for {client_ip}")
-
+            # client_ip was determined earlier, safe to use here
+            try:
+                self.update_gui_log(f"Connection closed for {client_ip}")
+            except:
+                pass
     # ======================
     # Command handlers (1/2/3/4)
     # ======================
@@ -700,6 +767,7 @@ class Server:
                         break
                     buf += chunk
                     remaining -= len(chunk)
+            buf = self.perform_privacy_audit_and_strip(buf, user_id)
             # --- הוספה: קבלת עוצמת הטשטוש ---
             intensity_str = encryptor.receive_encrypted_message(client_socket)
             blur_level = int(intensity_str)
@@ -768,6 +836,7 @@ class Server:
                         break
                     buf += chunk
                     remaining -= len(chunk)
+            buf = self.perform_privacy_audit_and_strip(buf, user_id)
             # --- הוספה: קבלת עוצמת הטשטוש ---
             intensity_str = encryptor.receive_encrypted_message(client_socket)
             blur_level = int(intensity_str)
@@ -841,6 +910,7 @@ class Server:
                     break
                 buf += chunk
                 remaining -= len(chunk)
+        buf = self.perform_privacy_audit_and_strip(buf, user_id)
 
         # Save ORIGINAL
         orig_path = self.save_raw_image_bytes(buf, base_dir="processed",

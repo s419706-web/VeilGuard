@@ -20,7 +20,8 @@ def create_all_tables(db_manager: DatabaseManager):
         " last_seen DATETIME NOT NULL,"
         " ddos_status TINYINT(1) NOT NULL DEFAULT 0,"
         " total_sent_media INT NOT NULL DEFAULT 0,"
-        " password_hash VARCHAR(255) NOT NULL"
+        " password_hash VARCHAR(255) NOT NULL,"
+        " totp_secret VARCHAR(32) NOT NULL"
         ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
     )
 
