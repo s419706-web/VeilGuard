@@ -33,7 +33,7 @@ def run_single_client(client_id, cred_file):
     success = client.send_credentials(None, auto_file=cred_file)
     
     # --- שינוי כאן: כולם מחזיקים את החיבור, לא משנה אם הצליחו או נכשלו ---
-    print(f"[Thread {client_id}] Result: {success}. Holding connection...")
+    print(f"[Thread {client_id}] Result: {success}.")
     
     # עכשיו כל 20 הלקוחות יישארו "תקועים" בשרת למשך 15 שניות
     time.sleep(15) 

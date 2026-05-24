@@ -10,7 +10,6 @@ A Tkinter-based client that connects to the VeilGuard server and runs 3 operatio
 Key ideas:
 - Encrypted communication using `Encryption` (send/receive strings + raw bytes).
 - Splash screen before login.
-- Simple login popup; credentials are saved to creds.txt for next time.
 - Modern dark UI with two preview panels: Original (left) and Processed (right).
 - Threading so the UI stays responsive while network operations run.
 - If no image is selected by the user, the client sends "0" so the server uses
@@ -145,8 +144,6 @@ class Client:
         tick()
         return splash
 
-
-
     # ======================
     # STYLE / UI HELPERS
     # ======================
@@ -190,21 +187,16 @@ class Client:
         style.map("Action.TButton",
                   background=[("active", self._panel_hi)],
                   foreground=[("disabled", "#777777")])
-        
 
         # Labels
         style.configure("Status.TLabel", background=self._bg, foreground=self._muted, font=("Segoe UI", 10))
         style.configure("Title.TLabel", background=self._bg, foreground="white", font=("Segoe UI Semibold", 20))
 
     def draw_gradient_header(self, parent, width=980, height=90):
-        """
-        Draw a simple left->right gradient as a header with the app title.
-        This is purely cosmetic to make the UI look more modern.
-        """
+        """Draw a simple left->right gradient as a header with the app title."""
         canvas = tk.Canvas(parent, height=height, width=width, highlightthickness=0, bd=0, bg=self._bg)
         canvas.pack(fill=tk.X, expand=False)
 
-        # Gradient from purple accent to dark bg
         start = (124, 58, 237)  # #7c3aed
         end = (15, 17, 21)      # #0f1115
         steps = width
@@ -221,22 +213,17 @@ class Client:
         return canvas
 
     def show_toast(self, text, ms=1800):
-        """
-        Small floating message (like a toast). Optional nice feedback for the user.
-        """
         toast = tk.Toplevel(self.ui_root)
         toast.overrideredirect(True)
         toast.configure(bg=self._panel)
         lbl = tk.Label(toast, text=text, bg=self._panel, fg=self._fg, font=("Segoe UI", 10), padx=14, pady=8)
         lbl.pack()
-        # Position near bottom-right
         self.ui_root.update_idletasks()
         x = self.ui_root.winfo_x() + self.ui_root.winfo_width() - toast.winfo_reqwidth() - 20
         y = self.ui_root.winfo_y() + self.ui_root.winfo_height() - toast.winfo_reqheight() - 40
         toast.geometry("+{}+{}".format(x, y))
         toast.after(ms, toast.destroy)
 
-    # Spinner animation (3 dots) for long operations
     def spinner_start(self):
         if self._spinner_job:
             return
@@ -266,7 +253,6 @@ class Client:
                 pass
 
     class Tooltip:
-        """Very small tooltip helper (hover text)."""
         def __init__(self, widget, text):
             self.widget = widget
             self.text = text
@@ -291,7 +277,6 @@ class Client:
                 self.tip = None
 
     def ui_set_status(self, msg):
-        """Thread-safe: update the bottom status label from any thread."""
         if self.status_var:
             def _set():
                 self.status_var.set(msg)
@@ -309,18 +294,14 @@ class Client:
                 self.spinner_stop()
             else:
                 self.spinner_start()
-
         if self.ui_root:
             self.ui_root.after(0, _apply)
-
 
     # ======================
     # UI BUILD
     # ======================
     def show_2fa_setup_dialog(self, parent, username, secret):
-        """
-        Creates a stunning popup displaying the 2FA QR code for Google Authenticator.
-        """
+        """Creates a popup displaying the 2FA QR code for Google Authenticator."""
         qr_win = tk.Toplevel(parent)
         qr_win.title("2FA Setup Required")
         qr_win.geometry("400x550")
@@ -329,28 +310,23 @@ class Client:
         qr_win.transient(parent)
         qr_win.grab_set()
 
-        # Title
         tk.Label(qr_win, text="Secure Your Account", font=("Segoe UI", 18, "bold"), 
                  bg="#0b0f19", fg="#00ffcc").pack(pady=(20, 5))
         tk.Label(qr_win, text="Scan this QR code with Google Authenticator", 
                  font=("Segoe UI", 10), bg="#0b0f19", fg="#94a3b8").pack()
 
-        # Generate QR Code for Google Authenticator (TOTP URI format)
         uri = f"otpauth://totp/VeilGuard:{username}?secret={secret}&issuer=VeilGuard"
         qr = qrcode.QRCode(version=1, box_size=8, border=2)
         qr.add_data(uri)
         qr.make(fit=True)
         
-        # Create a sleek dark-themed QR code
         qr_img = qr.make_image(fill_color="#ffffff", back_color="#1e293b").convert('RGB')
         qr_photo = ImageTk.PhotoImage(qr_img)
 
-        # Display QR Code
         qr_label = tk.Label(qr_win, image=qr_photo, bg="#0b0f19", bd=0)
-        qr_label.image = qr_photo  # Keep reference!
+        qr_label.image = qr_photo  
         qr_label.pack(pady=20)
 
-        # Fallback text
         tk.Label(qr_win, text="Or enter this code manually:", 
                  font=("Segoe UI", 9), bg="#0b0f19", fg="#94a3b8").pack()
         
@@ -360,7 +336,6 @@ class Client:
         secret_entry.config(state="readonly")
         secret_entry.pack(pady=5, ipady=5)
 
-        # Finish button
         tk.Button(qr_win, text="I'VE SCANNED IT", command=qr_win.destroy,
                   bg="#7c3aed", fg="white", font=("Segoe UI", 11, "bold"), bd=0,
                   activebackground="#6d28d9", activeforeground="white", cursor="hand2").pack(fill="x", padx=50, pady=30, ipady=8)
@@ -368,7 +343,6 @@ class Client:
         parent.wait_window(qr_win)
         
     def build_ui(self, root):
-        """Create the main window, top action bar, previews, and status bar."""
         self.ui_root = root
         self.ui_root.title("VeilGuard Client")
         self.ui_root.geometry("1000x660")
@@ -376,25 +350,21 @@ class Client:
 
         self.create_styles()
 
-        # Header
         header = ttk.Frame(self.ui_root, style="TopBar.TFrame")
         header.pack(side=tk.TOP, fill=tk.X)
         self.ui_root.update_idletasks()
         self.draw_gradient_header(header, width=self.ui_root.winfo_width(), height=92)
 
-        # Action bar
         top = ttk.Frame(self.ui_root, style="TopBar.TFrame")
         top.pack(side=tk.TOP, fill=tk.X, padx=16, pady=(8, 10))
         self.btns["capture"] = ttk.Button(
-        top, text="📸  Capture from Camera",
-        style="Action.TButton",
-        command=lambda: self.ui_run_async(self.ui_capture_camera, needs_menu_sync=False)
+            top, text="📸  Capture from Camera",
+            style="Action.TButton",
+            command=lambda: self.ui_run_async(self.ui_capture_camera, needs_menu_sync=False)
         )
         self.btns["capture"].pack(side=tk.LEFT, padx=6)
 
-
         Client.Tooltip(self.btns["capture"], "Take a photo using your webcam")
-
 
         self.btns["choose"] = ttk.Button(top, text="📂  Choose Image",
                                          style="Action.TButton",
@@ -420,7 +390,7 @@ class Client:
                                          style="Action.TButton",
                                          command=lambda: self.ui_run_async(self.ui_do_logout))
         self.btns["logout"].pack(side=tk.RIGHT, padx=6)
-        # --- Blur Intensity Slider ---
+
         slider_frame = tk.Frame(top, bg=self._bg)
         slider_frame.pack(side=tk.LEFT, padx=20)
         
@@ -431,19 +401,15 @@ class Client:
                                    bg=self._bg, fg=self._accent, highlightthickness=0,
                                    troughcolor=self._panel, activebackground=self._accent,
                                    font=("Segoe UI", 9), length=150, showvalue=True)
-        self.blur_slider.set(5) # ברירת מחדל
+        self.blur_slider.set(5) 
         self.blur_slider.pack(side=tk.LEFT)
 
-        # Tooltips
         Client.Tooltip(self.btns["choose"], "Pick an image from disk")
         Client.Tooltip(self.btns["face"], "Detect and blur all faces (server-side)")
         Client.Tooltip(self.btns["bg"], "Blur the background; keep people sharp (server-side)")
         Client.Tooltip(self.btns["user"], "Draw rectangles to blur areas; press ESC to finish (client-side)")
         Client.Tooltip(self.btns["logout"], "Close session and exit")
-        
-        
 
-        # Main content (two cards)
         mid = ttk.Frame(self.ui_root)
         mid.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=8)
 
@@ -457,7 +423,6 @@ class Client:
         self.preview_proc = ttk.Label(right, background=self._panel)
         self.preview_proc.pack(fill=tk.BOTH, expand=True)
 
-        # Status bar + spinner
         bottom = ttk.Frame(self.ui_root)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=16, pady=10)
         self.status_var = tk.StringVar(value="Ready · Choose an image or use server defaults.")
@@ -465,28 +430,20 @@ class Client:
         self.spinner_label = ttk.Label(bottom, text="", style="Status.TLabel")
         self.spinner_label.pack(side=tk.RIGHT)
 
-        # Window close
         self.ui_root.protocol("WM_DELETE_WINDOW", self.ui_root.destroy)
-        
 
     # ======================
     # UI UTILITIES
     # ======================
     def ui_capture_camera(self):
-        """
-        Capture a single image from the computer's webcam.
-        Saves it as 'captured.jpg' and sets it as the selected image.
-        """
         try:
             self.ui_set_status("Opening camera...")
             cap = cv2.VideoCapture(0)
-
             if not cap.isOpened():
                 self.ui_set_status("❌ Failed to access the camera.")
                 return
 
             self.ui_set_status("Press SPACE to capture, ESC to cancel.")
-
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -495,38 +452,27 @@ class Client:
 
                 cv2.imshow("Press SPACE to capture / ESC to cancel", frame)
                 key = cv2.waitKey(1) & 0xFF
-
                 if key == 27:  # ESC
                     self.ui_set_status("Camera capture canceled.")
                     break
                 elif key == 32:  # SPACE
-                    # Save the captured image
                     save_path = os.path.join(os.getcwd(), "captured.jpg")
                     cv2.imwrite(save_path, frame)
                     self.selected_image_path = save_path
                     self.ui_set_status(f"Captured and selected image: {save_path}")
 
-                    # Show the captured image in the left preview
                     img = Image.open(save_path)
                     self.ui_show_preview(img, is_processed=False)
                     break
-
             cap.release()
             cv2.destroyAllWindows()
-
         except Exception as e:
             self.ui_set_status(f"Camera capture failed: {e}")
-            try:
-                cap.release()
-            except Exception:
-                pass
+            try: cap.release()
+            except: pass
             cv2.destroyAllWindows()
 
     def choose_image_dialog(self):
-        """
-        Let the user pick an image. If successful, show it immediately on the left panel.
-        If the user doesn't pick, operations 1/2 will use server defaults.
-        """
         fp = filedialog.askopenfilename(
             title="Choose image",
             filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp *.gif"), ("All", "*.*")]
@@ -541,10 +487,6 @@ class Client:
                 self.ui_set_status("Failed to open image: {}".format(e))
 
     def ui_show_preview(self, pil_img, is_processed):
-        """
-        Show a PIL image inside the left (Original) or right (Processed) panel.
-        The image is resized (thumbnail) to fit nicely.
-        """
         max_w, max_h = 420, 280
         im = pil_img.copy()
         im.thumbnail((max_w, max_h))
@@ -560,38 +502,27 @@ class Client:
         self.ui_root.after(0, _apply)
 
     def ui_run_async(self, target, *args, needs_menu_sync=True, **kwargs):
-        """
-        Run any long operation in a background thread:
-        - Disable buttons, show spinner
-        - Optionally sync the server menu at the end (only for network ops)
-        """
         def runner():
             try:
                 self.ui_enable_controls(False)
                 target(*args, **kwargs)
             finally:
                 if not self.logged_out and needs_menu_sync:
-                    try:
-                        self.receive_menu()
-                    except Exception:
-                        pass
+                    try: self.receive_menu()
+                    except: pass
                 self.ui_enable_controls(True)
         threading.Thread(target=runner, daemon=True).start()
 
     # ======================
     # LOGIN / MENU UI
     # ======================
-    def upgraded_login_dialog(self, parent, remember_path="creds.txt", initial_error=""):
-        """
-        Ultra-modern UI for Login/Register with a 'Cyber' aesthetic.
-        Guaranteed to impress the examiner. Fixed rendering layout.
-        """
+    def upgraded_login_dialog(self, parent, initial_error=""):
+        """Ultra-modern UI for Login/Register with a 'Cyber' aesthetic."""
         self.login_win = tk.Toplevel(parent)
         self.login_win.title("VeilGuard | Secure Access")
-        self.login_win.geometry("450x700") # הגדלנו טיפה כדי שהכל ייכנס ברווח
+        self.login_win.geometry("450x700") 
         self.login_win.resizable(False, False)
         
-        # --- Deep Cyber Palette ---
         BG_COLOR = "#050810"       
         INPUT_BG = "#111827"       
         FG_COLOR = "#ffffff"       
@@ -606,24 +537,12 @@ class Client:
         self.is_login_mode = False  
         self.login_result = {"action": None, "u": None, "p": None, "totp": None}
 
-        saved_user, saved_pass = "", ""
-        if os.path.exists(remember_path):
-            try:
-                with open(remember_path, "r", encoding="utf-8") as f:
-                    lines = f.read().splitlines()
-                    if len(lines) >= 2:
-                        saved_user, saved_pass = lines[0].strip(), lines[1].strip()
-            except Exception: pass
-
-        # Background Canvas for aesthetic elements
         canvas = tk.Canvas(self.login_win, width=450, height=700, bg=BG_COLOR, highlightthickness=0)
         canvas.pack(fill="both", expand=True)
 
-        # Draw aesthetic cyber lines on background
         canvas.create_line(0, 150, 450, 50, fill="#1e293b", width=2)
         canvas.create_line(0, 600, 450, 650, fill="#1e293b", width=2)
 
-        # Main frame positioned dynamically (Fixes the clipping bug!)
         main_frame = tk.Frame(canvas, bg=BG_COLOR)
         main_frame.place(relx=0.5, rely=0.5, anchor="center", width=380)
         
@@ -631,53 +550,46 @@ class Client:
         self.submit_btn_text = tk.StringVar(value="REGISTER ENTITY")
         self.toggle_btn_text = tk.StringVar(value="[ Switch to Login Protocol ]")
 
-        # Cyber Title
         tk.Label(main_frame, text="VEILGUARD", font=("Consolas", 26, "bold", "italic"),
                  bg=BG_COLOR, fg=ACCENT_COLOR).pack(anchor="center", pady=(0, 5))
         tk.Label(main_frame, textvariable=self.title_var, font=("Segoe UI", 12, "bold"),
                  bg=BG_COLOR, fg="#ffffff").pack(anchor="center", pady=(0, 20))
 
-        # Inline Error Message
         self.err_label = tk.Label(main_frame, text=initial_error, fg="#ff0055", bg=BG_COLOR, font=("Consolas", 10, "bold"))
         self.err_label.pack(anchor="center", pady=(0, 10))
 
-        # --- USERNAME FIELD ---
         tk.Label(main_frame, text="IDENTIFIER (USERNAME)", bg=BG_COLOR, fg=MUTED_TEXT, font=("Consolas", 9, "bold")).pack(anchor="w")
         u_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground="#334155")
         u_frame.pack(fill="x", pady=(2, 15))
-        self.user_var = tk.StringVar(value=saved_user)
+        self.user_var = tk.StringVar()
         user_entry = tk.Entry(u_frame, textvariable=self.user_var, font=("Segoe UI", 12), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR)
         user_entry.pack(fill="x", padx=10, ipady=6)
         
         user_entry.bind("<FocusIn>", lambda e: u_frame.config(highlightbackground=ACCENT_COLOR))
         user_entry.bind("<FocusOut>", lambda e: u_frame.config(highlightbackground="#334155"))
 
-        # --- PASSWORD FIELD ---
         tk.Label(main_frame, text="SECURITY KEY (PASSWORD)", bg=BG_COLOR, fg=MUTED_TEXT, font=("Consolas", 9, "bold")).pack(anchor="w")
         p_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground="#334155")
         p_frame.pack(fill="x", pady=(2, 5))
-        self.pass_var = tk.StringVar(value=saved_pass)
+        self.pass_var = tk.StringVar()
         pass_entry = tk.Entry(p_frame, textvariable=self.pass_var, show="•", font=("Segoe UI", 12), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR)
         pass_entry.pack(fill="x", padx=10, ipady=6)
         
         pass_entry.bind("<FocusIn>", lambda e: p_frame.config(highlightbackground=ACCENT_COLOR))
         pass_entry.bind("<FocusOut>", lambda e: p_frame.config(highlightbackground="#334155"))
 
-        # Show Password Toggle
         self.show_var = tk.BooleanVar()
         tk.Checkbutton(main_frame, text="Reveal Security Key", variable=self.show_var,
                        command=lambda: pass_entry.config(show="" if self.show_var.get() else "•"),
                        bg=BG_COLOR, fg=MUTED_TEXT, activebackground=BG_COLOR, activeforeground=FG_COLOR,
                        selectcolor=BG_COLOR, cursor="hand2", font=("Consolas", 9)).pack(anchor="w", pady=(0, 15))
 
-        # --- TOTP SECTION (Hidden by default during Register) ---
         self.totp_label = tk.Label(main_frame, text="2FA AUTHENTICATION CODE", bg=BG_COLOR, fg=ACCENT_COLOR, font=("Consolas", 9, "bold"))
         self.totp_frame = tk.Frame(main_frame, bg=INPUT_BG, bd=1, highlightthickness=1, highlightbackground=ACCENT_COLOR)
         self.totp_var = tk.StringVar()
         self.totp_entry = tk.Entry(self.totp_frame, textvariable=self.totp_var, font=("Segoe UI", 16, "bold"), bg=INPUT_BG, fg=FG_COLOR, bd=0, insertbackground=ACCENT_COLOR, justify="center")
         self.totp_entry.pack(fill="x", padx=10, ipady=6)
 
-        # --- BUTTONS ---
         self.submit_btn = tk.Button(main_frame, textvariable=self.submit_btn_text, command=self._on_login_submit,
                                bg=ACCENT_COLOR, fg="#000000", font=("Consolas", 14, "bold"), bd=0,
                                activebackground=ACCENT_HOVER, activeforeground="#000000", cursor="hand2")
@@ -696,11 +608,9 @@ class Client:
         return self.login_result
     
     def _on_login_toggle(self):
-        """Switches UI layout dynamically between Login and Register modes."""
         self.is_login_mode = not self.is_login_mode
         self.err_label.config(text="") 
         
-        # Unpack control buttons to maintain correct vertical stacking order
         self.submit_btn.pack_forget()
         self.toggle_btn.pack_forget()
         
@@ -709,7 +619,6 @@ class Client:
             self.submit_btn_text.set("AUTHORIZE ACCESS")
             self.toggle_btn_text.set("[ Switch to Registration Protocol ]")
             
-            # Show TOTP inputs
             self.totp_label.pack(anchor="w", pady=(5, 0))
             self.totp_frame.pack(fill="x", pady=(2, 10))
         else:
@@ -717,11 +626,9 @@ class Client:
             self.submit_btn_text.set("REGISTER ENTITY")
             self.toggle_btn_text.set("[ Switch to Login Protocol ]")
             
-            # Hide TOTP inputs
             self.totp_label.pack_forget()
             self.totp_frame.pack_forget()
             
-        # Re-pack buttons at the bottom
         self.submit_btn.pack(fill="x", pady=(20, 15), ipady=8)
         self.toggle_btn.pack(anchor="center")
 
@@ -747,12 +654,7 @@ class Client:
         self.login_win.destroy()
 
     def send_credentials(self, parent, auto_file=None):
-        """
-        Handles sending credentials and 2FA codes. 
-        Shows QR code UI upon successful registration.
-        """
-        creds_file = auto_file if auto_file else "creds.txt"
-        
+        """Handles sending credentials and 2FA codes. Retains auto_file for Stress Test compatibility."""
         if auto_file:
             if not os.path.exists(auto_file): return False
             try:
@@ -775,7 +677,7 @@ class Client:
 
         current_error = "" 
         while True:
-            result = self.upgraded_login_dialog(parent, creds_file, initial_error=current_error)
+            result = self.upgraded_login_dialog(parent, initial_error=current_error)
             if not result or not result["action"]: return False
             
             action, client_id, password = result["action"], result["u"], result["p"]
@@ -794,17 +696,10 @@ class Client:
                 if response.startswith("REGISTER_SUCCESS"):
                     parts = response.split("|")
                     secret = parts[1] if len(parts) > 1 else "N/A"
-                    
-                    # --- WOW FACTOR: Show the modern QR Code Dialog ---
                     self.show_2fa_setup_dialog(parent, client_id, secret)
-                    
-                    with open(creds_file, "w", encoding="utf-8") as f:
-                        f.write(client_id + "\n" + password)
                     return True
                     
                 elif response == "LOGIN_SUCCESS":
-                    with open(creds_file, "w", encoding="utf-8") as f:
-                        f.write(client_id + "\n" + password)
                     return True
                     
                 current_error = response.replace("ERROR: ", "")
@@ -814,65 +709,35 @@ class Client:
             except Exception as e:
                 messagebox.showerror("System Error", str(e), parent=parent)
                 return False
+
     def receive_menu(self):
-        """
-        Read and print the server textual menu. 
-        This keeps both sides in sync after authentication.
-        """
         try:
             menu = self.encryptor.receive_encrypted_message(self.client_socket)
-            # Printing for debug/sync purposes
             print("\nAvailable operations received from server.")
             return menu
         except Exception as e:
             print("Menu synchronization error: {}".format(e))
             return None
 
-    def ui_do_logout(self):
-        """Modified to delete creds.txt upon manual logout."""
-        try:
-            self.encryptor.send_encrypted_message(self.client_socket, "4")
-            self.encryptor.receive_encrypted_message(self.client_socket)
-        finally:
-            self.logged_out = True
-            if os.path.exists("creds.txt"):
-                os.remove("creds.txt") # Clean for next user
-            self.client_socket.close()
-            self.ui_root.after(500, self.ui_root.destroy)
     # ======================
     # LOW-LEVEL IO HELPERS
     # ======================
     def pick_source_path(self):
-        """
-        Return a path to an image for processing if available, else None.
-        """
         if self.selected_image_path and os.path.exists(self.selected_image_path):
             return self.selected_image_path
-
         for p in getattr(self, "usual_images", []):
-            if os.path.exists(p):
-                return p
-
-        return None  # חשוב: לא לזרוק שגיאה
+            if os.path.exists(p): return p
+        return None
 
     def _recv_exact(self, n):
-        """
-        Receive exactly n bytes from the socket (or until the socket closes).
-        We loop until we collect n bytes (or the peer closes).
-        """
         buf = b""
         while len(buf) < n:
             chunk = self.client_socket.recv(min(4096, n - len(buf)))
-            if not chunk:
-                break
+            if not chunk: break
             buf += chunk
         return buf
 
     def recv_size_or_error(self):
-        """
-        Read a size string from the server. If the server sent an error message
-        that starts with "[ERROR]", raise RuntimeError. Otherwise, convert to int.
-        """
         s = self.encryptor.receive_encrypted_message(self.client_socket)
         if s.startswith("[ERROR]"):
             raise RuntimeError(s)
@@ -882,23 +747,13 @@ class Client:
     # OPERATIONS (UI-ACTIONS)
     # ======================
     def ui_do_face(self):
-        """
-        Option 1 (Blur Faces):
-        1) Send "1" to select the operation.
-        2) If the user selected an image -> send its size and bytes.
-           Otherwise -> send "0" so the server uses a default image.
-        3) Receive ORIGINAL first (size + bytes), display it on the left panel.
-        4) Receive PROCESSED next (size + bytes), display it on the right panel.
-        """
         try:
             self.ui_set_status("Running: Blur Faces...")
             self.encryptor.send_encrypted_message(self.client_socket, "1")
 
-            # Use selected image if exists; otherwise let server use default
             src = self.selected_image_path if (self.selected_image_path and os.path.exists(self.selected_image_path)) else None
             if src:
-                with open(src, "rb") as f:
-                    data = f.read()
+                with open(src, "rb") as f: data = f.read()
                 self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
@@ -908,16 +763,13 @@ class Client:
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
 
-            # --- הוספה כאן: שליחת עוצמת הטשטוש ---
             self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
 
-            # ORIGINAL first
             orig_size = self.recv_size_or_error()
             orig_bytes = self._recv_exact(orig_size)
             orig_img = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
             self.ui_show_preview(orig_img, is_processed=False)
 
-            # PROCESSED second
             out_size = self.recv_size_or_error()
             out_bytes = self._recv_exact(out_size)
             proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
@@ -928,22 +780,13 @@ class Client:
             self.ui_set_status("Face blur failed: {}".format(e))
 
     def ui_do_bg(self):
-        """
-        Option 2 (Blur Background):
-        Same IO flow as option 1:
-          - Send "2"
-          - Send image size+bytes OR "0" to use server default
-          - Receive ORIGINAL first (show on the left)
-          - Receive PROCESSED next (show on the right)
-        """
         try:
             self.ui_set_status("Running: Blur Background...")
             self.encryptor.send_encrypted_message(self.client_socket, "2")
 
             src = self.selected_image_path if (self.selected_image_path and os.path.exists(self.selected_image_path)) else None
             if src:
-                with open(src, "rb") as f:
-                    data = f.read()
+                with open(src, "rb") as f: data = f.read()
                 self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
@@ -953,15 +796,13 @@ class Client:
                 ack = self.encryptor.receive_encrypted_message(self.client_socket)
                 self.ui_set_status(ack)
 
-            # --- הוספה כאן: שליחת עוצמת הטשטוש ---
             self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
-            # ORIGINAL first
+
             orig_size = self.recv_size_or_error()
             orig_bytes = self._recv_exact(orig_size)
             orig_img = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
             self.ui_show_preview(orig_img, is_processed=False)
 
-            # PROCESSED second
             out_size = self.recv_size_or_error()
             out_bytes = self._recv_exact(out_size)
             proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
@@ -971,38 +812,30 @@ class Client:
         except Exception as e:
             self.ui_set_status("Background blur failed: {}".format(e))
 
-   
-
     def ui_do_user(self):
         try:
             self.ui_set_status("Running: User ROI (server-side)...")
             self.encryptor.send_encrypted_message(self.client_socket, "3")
 
-            # 1) READY
             _ = self.encryptor.receive_encrypted_message(self.client_socket)
 
-            # 2) מקור תמונה
             src_path = self.pick_source_path()
             if src_path is None:
                 self.encryptor.send_encrypted_message(self.client_socket, "0")
             else:
-                with open(src_path, "rb") as f:
-                    data = f.read()
+                with open(src_path, "rb") as f: data = f.read()
                 self.encryptor.send_encrypted_message(self.client_socket, str(len(data)))
-                ack = self.encryptor.receive_encrypted_message(self.client_socket)  # "[INFO] Send the image..."
+                ack = self.encryptor.receive_encrypted_message(self.client_socket)  
                 self.client_socket.sendall(data)
 
-            # 3) קבלת ORIGINAL לתצוגה ולבחירת ROI
             orig_size = self.recv_size_or_error()
             orig_bytes = self._recv_exact(orig_size)
             orig_pil = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
             self.ui_show_preview(orig_pil, is_processed=False)
 
             img_bgr = cv2.imdecode(np.frombuffer(orig_bytes, np.uint8), cv2.IMREAD_COLOR)
-            if img_bgr is None:
-                raise RuntimeError("Failed to decode ORIGINAL")
+            if img_bgr is None: raise RuntimeError("Failed to decode ORIGINAL")
 
-            # 4) בחירת מלבנים (ENTER לאישור, ESC לביטול)
             cv2.namedWindow("Draw ROIs (ENTER=OK, ESC=cancel)", cv2.WINDOW_NORMAL)
             rois = cv2.selectROIs("Draw ROIs (ENTER=OK, ESC=cancel)", img_bgr, False, False)
             cv2.destroyAllWindows()
@@ -1013,14 +846,11 @@ class Client:
                     if int(w) > 0 and int(h) > 0:
                         rects.append([int(x), int(y), int(w), int(h)])
 
-            # 5) שליחת ה-ROI לשרת (כ-JSON)
             self.encryptor.send_encrypted_message(self.client_socket, "[C_RECTS]")
             self.encryptor.send_encrypted_message(self.client_socket, json.dumps(rects))
             
-            #6) --- הוספה כאן: שליחת עוצמת הטשטוש עבור ה-ROI ---
             self.encryptor.send_encrypted_message(self.client_socket, str(self.blur_slider.get()))
 
-            # 7) קבלת PROCESSED מהשרת והצגה
             out_size = self.recv_size_or_error()
             out_bytes = self._recv_exact(out_size)
             proc_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
@@ -1030,14 +860,7 @@ class Client:
         except Exception as e:
             self.ui_set_status(f"User ROI server-side blur failed: {e}")
 
-
     def ui_do_logout(self):
-        """
-        Option 4 (Logout):
-        - Send "4" to the server and read its final message.
-        - Mark logged_out, close socket, close UI after a short delay.
-        - Delete creds.txt so next login is clean.
-        """
         try:
             self.ui_set_status("Logging out...")
             self.encryptor.send_encrypted_message(self.client_socket, "4")
@@ -1045,42 +868,26 @@ class Client:
             self.ui_set_status(msg)
         finally:
             self.logged_out = True
-            try:
-                self.client_socket.close()
-            except Exception:
-                pass
-                
-            # --- Delete creds.txt upon manual logout ---
-            try:
-                if os.path.exists("creds.txt"):
-                    os.remove("creds.txt")
-            except Exception:
-                pass
-                
+            try: self.client_socket.close()
+            except: pass
             self.ui_root.after(500, self.ui_root.destroy)
+
     # ======================
     # MAIN FLOW
     # ======================
     def run(self):
         try:
             self.connect_to_server()
-            if not self.client_socket:
-                return
+            if not self.client_socket: return
 
-            # ROOT יחיד לכל התוכנית
             root = tk.Tk()
-            root.withdraw()  # מסתירים עד שמסיימים ספלאש+לוגין
+            root.withdraw()  
 
-            # ספלאש וידאו (על אותו root)
             splash = self.show_splash(root)
 
-            # כשהספלאש נסגר -> עושים login -> ואז פותחים UI
             def after_splash():
-                # אם הספלאש כבר נהרס, לפעמים winfo_exists זורק TclError
-                try:
-                    alive = splash.winfo_exists()
-                except tk.TclError:
-                    alive = 0
+                try: alive = splash.winfo_exists()
+                except tk.TclError: alive = 0
 
                 if alive:
                     root.after(100, after_splash)
@@ -1089,22 +896,18 @@ class Client:
                 root.lift()
                 root.attributes("-topmost", True)
                 root.after(200, lambda: root.attributes("-topmost", False))
-                # עכשיו ממשיכים ללוגין
+                
                 ok = self.send_credentials(root)
                 if not ok:
                     try:
-                        if self.client_socket:
-                            self.client_socket.close()
-                    except Exception:
-                        pass
+                        if self.client_socket: self.client_socket.close()
+                    except: pass
                     root.destroy()
                     return
 
                 self.receive_menu()
-
                 root.deiconify()
                 self.build_ui(root)
-
 
             after_splash()
             root.mainloop()
@@ -1113,16 +916,10 @@ class Client:
             print("Fatal error:", e)
         finally:
             if self.client_socket:
-                try:
-                    self.client_socket.close()
-                except Exception:
-                    pass
+                try: self.client_socket.close()
+                except: pass
 
 
-
-# ======================
-# ENTRY POINT
-# ======================
 if __name__ == "__main__":
     print("Starting VeilGuard Client...")
     client = Client()
